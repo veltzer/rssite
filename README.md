@@ -143,20 +143,25 @@ This dual requirement is what mkdocs-style plugin ecosystems get wrong: plugins 
 - **Support for all possible outputs.** If a plugin fundamentally cannot enumerate its outputs without running the full generation, that plugin is incompatible with rssite's design. (Most can; some genuinely can't.)
 - **Dynamic/runtime content.** rssite generates static files. No server-side rendering, no runtime template evaluation, no per-request generation.
 
-## Integration example: rsconstruct
+## Integration: rsconstruct MassGenerator
 
-Once implemented, rsconstruct can integrate like:
+The [rsconstruct](https://github.com/veltzer/rsconstruct) build system defines a dedicated processor type, **MassGenerator**, that consumes tools emitting this manifest format. See:
+
+- [Output Prediction](https://github.com/veltzer/rsconstruct/blob/master/docs/src/output-prediction.md) — the full design rationale on the rsconstruct side.
+- [MassGenerator processor type](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processors/mass_generator.md) — user-facing contract.
+
+Wiring rssite into an rsconstruct project:
 
 ```toml
-[processor.rssite]
+[processor.mass_generator.site]
 command         = "rssite build"
 predict_command = "rssite plan"
 output_dirs     = ["_site"]
 ```
 
-rsconstruct runs `rssite plan` at graph-build time, promotes each planned output to a declared product output with its own `sources` dependencies, caches per-file, and plays nicely with other processors writing to `_site/`.
+rsconstruct runs `rssite plan` at graph-build time, turns each manifest entry into a declared product with its own `sources` as the input list, caches each page individually, and plays cleanly with other processors writing into `_site/`. The manifest's `sources` field is what enables rsconstruct to rebuild only the pages whose inputs changed.
 
-Other tools (Ninja generator, Bazel macros, Make meta-rules) can follow the same pattern.
+Other build systems (Ninja generator scripts, Bazel macros, Make meta-rules) can follow the same pattern — the manifest format is deliberately build-tool-agnostic.
 
 ## Open design questions
 
@@ -173,6 +178,13 @@ Other tools (Ninja generator, Bazel macros, Make meta-rules) can follow the same
 - **Hugo**: very fast, but rebuilds everything on each invocation; no partial build.
 - **Jekyll**: Liquid permalinks + front matter — manifest could in principle be computed, but the tool doesn't expose one.
 - **Bazel's `skylib`**: rules declare outputs up front via `attrs.output()` and family. This is exactly the pattern rssite adopts at the tool level.
+
+## See also
+
+- [rsconstruct: Output Prediction design](https://github.com/veltzer/rsconstruct/blob/master/docs/src/output-prediction.md) — rsconstruct's full design spec for consuming plan-emitting tools.
+- [rsconstruct: MassGenerator processor type](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processors/mass_generator.md) — user-facing config reference for wiring rssite-style tools into an rsconstruct build.
+- [rsconstruct: Shared Output Directory](https://github.com/veltzer/rsconstruct/blob/master/docs/src/shared-output-directory.md) — the fallback mechanism for tools that do NOT (yet) emit a manifest.
+- [rsconstruct: Processor Ordering](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processor-ordering.md) — why rsconstruct prefers discovering outputs over letting users declare explicit ordering.
 
 ## Contributing
 
