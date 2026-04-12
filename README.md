@@ -147,7 +147,7 @@ This dual requirement is what mkdocs-style plugin ecosystems get wrong: plugins 
 
 The [rsconstruct](https://github.com/veltzer/rsconstruct) build system defines a dedicated processor type, **MassGenerator**, that consumes tools emitting this manifest format. See:
 
-- [Output Prediction](https://github.com/veltzer/rsconstruct/blob/master/docs/src/output-prediction.md) — the full design rationale on the rsconstruct side.
+- [Output Prediction](https://github.com/veltzer/rsconstruct/blob/master/docs/src/internal/output-prediction.md) — the full design rationale on the rsconstruct side.
 - [MassGenerator processor type](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processors/mass_generator.md) — user-facing contract.
 
 Wiring rssite into an rsconstruct project:
@@ -181,10 +181,10 @@ Other build systems (Ninja generator scripts, Bazel macros, Make meta-rules) can
 
 ## See also
 
-- [rsconstruct: Output Prediction design](https://github.com/veltzer/rsconstruct/blob/master/docs/src/output-prediction.md) — rsconstruct's full design spec for consuming plan-emitting tools.
+- [rsconstruct: Output Prediction design](https://github.com/veltzer/rsconstruct/blob/master/docs/src/internal/output-prediction.md) — rsconstruct's full design spec for consuming plan-emitting tools.
 - [rsconstruct: MassGenerator processor type](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processors/mass_generator.md) — user-facing config reference for wiring rssite-style tools into an rsconstruct build.
-- [rsconstruct: Shared Output Directory](https://github.com/veltzer/rsconstruct/blob/master/docs/src/shared-output-directory.md) — the fallback mechanism for tools that do NOT (yet) emit a manifest.
-- [rsconstruct: Processor Ordering](https://github.com/veltzer/rsconstruct/blob/master/docs/src/processor-ordering.md) — why rsconstruct prefers discovering outputs over letting users declare explicit ordering.
+- [rsconstruct: Shared Output Directory](https://github.com/veltzer/rsconstruct/blob/master/docs/src/internal/shared-output-directory.md) — the fallback mechanism for tools that do NOT (yet) emit a manifest.
+- [rsconstruct: Processor Ordering](https://github.com/veltzer/rsconstruct/blob/master/docs/src/internal/processor-ordering.md) — why rsconstruct prefers discovering outputs over letting users declare explicit ordering.
 
 ## Contributing
 
