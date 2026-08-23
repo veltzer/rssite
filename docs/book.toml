@@ -1,0 +1,14 @@
+[book]
+authors = ["Mark Veltzer <mark.veltzer@gmail.com>"]
+language = "en"
+src = "src"
+title = "rssite - Static site generator with a pre-declared output manifest"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/veltzer/rssite"
+edit-url-template = "https://github.com/veltzer/rssite/edit/master/docs/{path}"
