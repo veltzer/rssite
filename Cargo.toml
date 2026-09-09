@@ -1,6 +1,6 @@
 [package]
 name = "rssite"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 authors = ["Mark Veltzer <mark.veltzer@gmail.com>"]
 description = "Static site generator with a pre-declared output manifest"
