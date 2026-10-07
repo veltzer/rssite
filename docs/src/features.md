@@ -5,11 +5,11 @@ A working list of everything we want a static site generator to do. Scope is del
 ## 1. Content sources
 
 - **Markdown (CommonMark + extensions)** via `pulldown-cmark`:
-  - Tables, strikethrough, task lists, footnotes, autolinks.
-  - Math: inline `$…$` and block `$$…$$`, rendered via KaTeX (client-side) or pre-rendered to MathML.
-  - Mermaid / PlantUML diagrams as fenced code blocks, rendered at build time to SVG.
-  - Admonitions / callouts (`> [!NOTE]` GFM style and `!!! note` mkdocs style).
-  - Definition lists.
+    - Tables, strikethrough, task lists, footnotes, autolinks.
+    - Math: inline `$…$` and block `$$…$$`, rendered via KaTeX (client-side) or pre-rendered to MathML.
+    - Mermaid / PlantUML diagrams as fenced code blocks, rendered at build time to SVG.
+    - Admonitions / callouts (`> [!NOTE]` GFM style and `!!! note` mkdocs style).
+    - Definition lists.
 - **Front matter**: TOML (preferred) and YAML, parsed into a typed schema. Unknown keys are an error by default, warning in loose mode.
 - **Raw HTML** passthrough pages (`.html` in content tree).
 - **reStructuredText** (optional, behind a feature flag) — not a priority, but the plugin shape should allow it.
@@ -20,8 +20,8 @@ A working list of everything we want a static site generator to do. Scope is del
 ## 2. Templating
 
 - **Tera** as the default engine (Rust-native, Jinja-like).
-  - Template inheritance, includes, macros.
-  - Custom filters and functions registered by plugins.
+    - Template inheritance, includes, macros.
+    - Custom filters and functions registered by plugins.
 - **Layout selection** via front matter (`layout: post`) with sensible defaults (`default`, `page`, `post`, `index`).
 - **Partials** directory, auto-registered.
 - **Shortcodes / custom directives** inside markdown (`{{< figure src=… >}}` style) that expand during rendering — must be enumerable during plan.
@@ -30,14 +30,14 @@ A working list of everything we want a static site generator to do. Scope is del
 ## 3. Styling and assets
 
 - **SCSS/SASS** compilation via `grass` (or `rsass`):
-  - Partials (`_vars.scss`) tracked as sources in the manifest.
-  - Source maps in dev mode.
+    - Partials (`_vars.scss`) tracked as sources in the manifest.
+    - Source maps in dev mode.
 - **CSS** passthrough with optional minification.
 - **Asset pipeline**:
-  - Image optimization: resize, convert to WebP/AVIF, generate responsive `srcset`.
-  - SVG minification.
-  - Fingerprinted filenames (`style.a1b2c3.css`) for cache-busting — manifest reflects the hashed names so downstream tools can consume them.
-  - Copy-through for arbitrary static files.
+    - Image optimization: resize, convert to WebP/AVIF, generate responsive `srcset`.
+    - SVG minification.
+    - Fingerprinted filenames (`style.a1b2c3.css`) for cache-busting — manifest reflects the hashed names so downstream tools can consume them.
+    - Copy-through for arbitrary static files.
 - **JavaScript bundling** — out of scope; delegate to esbuild/rollup via rsconstruct. rssite just references the output.
 
 ## 4. Navigation and taxonomy
@@ -65,9 +65,9 @@ A working list of everything we want a static site generator to do. Scope is del
 ## 6. URLs and permalinks
 
 - **Configurable permalink schemes** per content type:
-  - `/posts/:year/:month/:slug/`
-  - `/:category/:slug.html`
-  - `/:slug/` (pretty URLs, `index.html` underneath).
+    - `/posts/:year/:month/:slug/`
+    - `/:category/:slug.html`
+    - `/:slug/` (pretty URLs, `index.html` underneath).
 - **Slug customization** via front matter, with a default slugifier (Unicode-aware).
 - **Aliases / redirects**: front matter `aliases: [/old-path/]` generates redirect pages or a redirect map for the server.
 - **Trailing-slash policy** configurable and consistent.

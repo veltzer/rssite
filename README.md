@@ -24,7 +24,7 @@ Not yet implemented. This README is the design spec that guides the implementati
 
 rssite exposes three modes:
 
-```
+```text
 rssite plan           # reads config, scans sources, prints JSON manifest to stdout, exits 0
 rssite build          # runs plan internally, then builds; errors if outputs diverge from plan
 rssite build --plan   # prints manifest AND builds in one invocation (single-pass)
