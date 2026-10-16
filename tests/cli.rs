@@ -317,6 +317,31 @@ fn bilingual_fixture_builds() {
 }
 
 #[test]
+fn a_plan_reader_that_closes_the_pipe_early_is_not_an_error() {
+    use std::io::Read;
+    let dir = temp_dir("plan-pipe");
+    copy_dir(&fixture(), &dir);
+    let mut child = Command::new(binary())
+        .arg("plan")
+        .current_dir(&dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Read a little, then close our end while rssite still has most of the
+    // manifest to write.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 64];
+    let n = stdout.read(&mut first).unwrap();
+    assert!(n > 0);
+    drop(stdout);
+    let output = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    assert!(output.status.success(), "{stderr}");
+}
+
+#[test]
 fn drafts_are_excluded_unless_asked() {
     let dir = temp_dir("drafts");
     copy_dir(&fixture(), &dir);

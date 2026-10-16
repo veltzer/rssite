@@ -57,10 +57,9 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
     let site = Site::load(root, drafts)?;
     let plan = Plan::compute(&site)?;
     if options.print_plan {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&plan.manifest(&site.config.output_dir))?
-        );
+        crate::util::emit(&serde_json::to_string_pretty(
+            &plan.manifest(&site.config.output_dir),
+        )?)?;
     }
     let files = render_all(&site, &plan)?;
     if options.verify_determinism {
@@ -104,11 +103,9 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
 pub fn print_plan(root: &Path, drafts: bool) -> Result<()> {
     let site = Site::load(root, drafts)?;
     let plan = Plan::compute(&site)?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&plan.manifest(&site.config.output_dir))?
-    );
-    Ok(())
+    crate::util::emit(&serde_json::to_string_pretty(
+        &plan.manifest(&site.config.output_dir),
+    )?)
 }
 
 /// The parsed site as JSON, for scripts that would otherwise re-parse it.
@@ -163,7 +160,7 @@ pub fn query(root: &Path, drafts: bool) -> Result<()> {
         "taxonomies": taxonomies,
         "outputs": plan.outputs.len(),
     });
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    crate::util::emit(&serde_json::to_string_pretty(&value)?)?;
     Ok(())
 }
 

@@ -124,6 +124,23 @@ pub fn glob_match(pattern: &str, rel: &str) -> Result<bool> {
     Ok(re.is_match(rel))
 }
 
+/// Print `text` and a newline on stdout. A reader that closed the pipe
+/// (`rssite plan | head`) is not an error: the output ends there, quietly,
+/// where `println!` would panic.
+pub fn emit(text: &str) -> Result<()> {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let written = out
+        .write_all(text.as_bytes())
+        .and_then(|()| out.write_all(b"\n"))
+        .and_then(|()| out.flush());
+    match written {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other.context("writing to stdout"),
+    }
+}
+
 #[cfg(test)]
 mod glob_tests {
     use super::glob_match;
