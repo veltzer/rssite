@@ -228,6 +228,27 @@ fn bilingual_fixture_builds() {
     let second = read(&dir, "_site/en/blog/second/index.html");
     assert!(second.contains("id=\"heading-one\"") && second.contains("id=\"heading-one-1\""));
 
+    // Year archives: every dated post of a year, in both languages, linked
+    // from the section's listing and from each other.
+    let archive = read(&dir, "_site/en/blog/2026/index.html");
+    for post in ["first", "second", "third", "renamed"] {
+        assert!(
+            archive.contains(&format!("href=\"https://example.org/en/blog/{post}/\"")),
+            "{post} missing from the 2026 archive:\n{archive}"
+        );
+    }
+    assert!(archive.contains("2026*"), "{archive}");
+    assert!(
+        archive.contains("hreflang=\"he\" href=\"https://example.org/he/blog/2026/\""),
+        "{archive}"
+    );
+    assert!(dir.join("_site/he/blog/2026/index.html").is_file());
+    let blog = read(&dir, "_site/en/blog/index.html");
+    assert!(
+        blog.contains("class=\"year\" href=\"https://example.org/en/blog/2026/\">2026 (4)"),
+        "{blog}"
+    );
+    assert!(read(&dir, "_site/sitemap.xml").contains("https://example.org/en/blog/2026/"));
     assert!(dir.join("_site/en/blog/page/2/index.html").is_file());
     assert!(
         !dir.join("_site/en/blog/page/1").exists(),

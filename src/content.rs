@@ -129,6 +129,12 @@ pub struct SectionFront {
     pub translation_key: Option<String>,
     #[serde(default)]
     pub body_from: Option<String>,
+    /// Write a listing of the section's dated pages per year, at
+    /// `<section>/<year>/`, rendered with `archive_template`.
+    #[serde(default)]
+    pub year_archives: bool,
+    #[serde(default)]
+    pub archive_template: Option<String>,
     #[serde(default)]
     pub smart_punctuation: Option<bool>,
 }

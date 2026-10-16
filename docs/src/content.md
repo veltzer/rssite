@@ -52,7 +52,7 @@ anything = "goes here"         # templates read page.extra
 +++
 ```
 
-A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
+A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
 
 ## Translations
 
@@ -94,6 +94,8 @@ Headings get ids from their text (`## Heading one` becomes `heading-one`, a repe
 ## Sorting and pagination
 
 `sort_by = "date"` sorts newest first. `paginate_by = 10` writes the first ten posts at the section's URL and the rest at `page/2/`, `page/3/` and so on. There is no `page/1/`: the first pager is the section itself, and nothing redirects to it.
+
+`year_archives = true` writes one listing per year of the section's dated pages at `<section>/<year>/`, rendered with `archive_template` (default `archive.html`), and gives the section a `years` list for templates to link from. A year's page in one language has the same year in the other languages as its translations, where those have pages that year, so the alternates and the language switcher work there as everywhere.
 
 Within a section's order, every page has `previous` and `next`.
 

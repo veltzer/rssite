@@ -1074,6 +1074,33 @@ impl Site {
             .unwrap_or_else(|| "page.html".to_owned())
     }
 
+    /// The years of a section's dated pages, newest first, each with the
+    /// indexes of its pages in section order. Empty for a section without
+    /// dates.
+    pub fn years_of(&self, section: &Section) -> Vec<(i32, Vec<usize>)> {
+        let mut years: Vec<(i32, Vec<usize>)> = Vec::new();
+        for &p in &section.pages {
+            let Some(date) = &self.pages[p].date else {
+                continue;
+            };
+            let year = chrono::Datelike::year(&date.datetime);
+            match years.iter_mut().find(|(y, _)| *y == year) {
+                Some((_, pages)) => pages.push(p),
+                None => years.push((year, vec![p])),
+            }
+        }
+        years.sort_by_key(|(y, _)| std::cmp::Reverse(*y));
+        years
+    }
+
+    pub fn archive_template(&self, section: &Section) -> String {
+        section
+            .front
+            .archive_template
+            .clone()
+            .unwrap_or_else(|| "archive.html".to_owned())
+    }
+
     pub fn section_template(&self, section: &Section) -> String {
         section.front.template.clone().unwrap_or_else(|| {
             if section.is_root() {

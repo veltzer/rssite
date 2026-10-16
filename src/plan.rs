@@ -21,6 +21,11 @@ pub enum Kind {
         term: usize,
         pager: Option<usize>,
     },
+    /// A section's listing of the pages of one year.
+    YearArchive {
+        section: usize,
+        year: i32,
+    },
     LanguageFeed(String),
     SectionFeed(usize),
     TermFeed {
@@ -196,6 +201,23 @@ impl Plan {
                             section: i,
                             pager: Some(n),
                         },
+                    });
+                }
+            }
+            if section.front.year_archives {
+                // A year's listing depends on every content file of the
+                // language, like the section listing: any post can move
+                // between years or be added.
+                let archive_sources = with_template(
+                    content_of_lang(&section.lang),
+                    &site.archive_template(section),
+                    &section.lang,
+                );
+                for (year, _) in site.years_of(section) {
+                    outputs.push(Output {
+                        path: format!("{base}{year}/index.html"),
+                        sources: archive_sources.clone(),
+                        kind: Kind::YearArchive { section: i, year },
                     });
                 }
             }
@@ -493,6 +515,10 @@ fn describe(site: &Site, kind: &Kind) -> String {
         Kind::Term { taxonomy, term, .. } => format!(
             "term {:?} of {}",
             site.taxonomies[*taxonomy].terms[*term].name, site.taxonomies[*taxonomy].name
+        ),
+        Kind::YearArchive { section, year } => format!(
+            "the {year} archive of section {}",
+            site.sections[*section].rel().unwrap_or("(root)")
         ),
         Kind::LanguageFeed(l) => format!("the {l} feed"),
         Kind::SectionFeed(s) => format!(

@@ -33,7 +33,7 @@ Every template gets:
 - `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.url_prefix) }}`.
 - `rssite`: the generator, `{name, version, url}`, for a "made by" line in a footer.
 
-Pages get `page` and `section` (the parent, without its page list). Sections get `section` with `pages` and `subsections`, and `paginator` when paginated. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
+Pages get `page` and `section` (the parent, without its page list). Sections get `section` with `pages`, `subsections` and `years` (the year archives, `{year, count, permalink, path}` newest first, empty unless `year_archives` is set), and `paginator` when paginated. A year archive gets `section` (light), `year`, `pages` (that year's, in section order) and `years`. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
 
 A page object:
 

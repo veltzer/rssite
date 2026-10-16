@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ section.title }} {{ year }}</h1>
+<ul>{% for post in pages %}<li><a href="{{ post.permalink }}">{{ post.title }}</a></li>{% endfor %}</ul>
+<p class="years">{% for y in years %}{{ y.year }}{% if y.year == year %}*{% endif %} {% endfor %}</p>
+{% endblock %}

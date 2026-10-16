@@ -230,6 +230,9 @@ impl Renderer<'_> {
         Ok(match &output.kind {
             Kind::Page(i) => self.render_page(*i)?.into_bytes(),
             Kind::Section { section, pager } => self.render_section(*section, *pager)?.into_bytes(),
+            Kind::YearArchive { section, year } => {
+                self.render_year_archive(*section, *year)?.into_bytes()
+            }
             Kind::TaxonomyList(t) => self.render_taxonomy_list(*t)?.into_bytes(),
             Kind::Term {
                 taxonomy,
@@ -412,6 +415,50 @@ impl Renderer<'_> {
         templates::render(self.engine(&lang), &template, &context)
     }
 
+    /// The listing of a section's pages of one year, at `<section>/<year>/`.
+    /// Its translations are the same year in the other languages the section
+    /// exists in, where that language has pages in that year.
+    fn render_year_archive(&mut self, s: usize, year: i32) -> Result<String> {
+        let section = &self.site.sections[s];
+        let lang = section.lang.clone();
+        let template = self.site.archive_template(section);
+        let view = self.model.sections[s].clone();
+        let current_path = format!("{}{year}/", section.path);
+        let pages: Vec<Value> = view["pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p["year"].as_i64() == Some(i64::from(year)))
+            .collect();
+        let translations: Vec<Value> = section
+            .translations
+            .iter()
+            .filter_map(|&t| {
+                let other = &self.site.sections[t];
+                let has_year = other.front.year_archives
+                    && self.site.years_of(other).iter().any(|(y, _)| *y == year);
+                has_year.then(|| {
+                    json!({
+                        "lang": other.lang,
+                        "permalink": format!("{}{year}/", other.permalink),
+                        "path": format!("{}{year}/", other.path),
+                        "title": other.title(),
+                    })
+                })
+            })
+            .collect();
+        let translations = Value::Array(translations);
+        let mut context = self.base_context(&lang, &current_path);
+        context.insert("section", &light(&view));
+        context.insert("year", &year);
+        context.insert("pages", &pages);
+        context.insert("years", &view["years"]);
+        context.insert("translations", &translations);
+        context.insert("alternates", &alternates(&translations));
+        templates::render(self.engine(&lang), &template, &context)
+    }
+
     fn render_taxonomy_list(&mut self, t: usize) -> Result<String> {
         let taxonomy = &self.site.taxonomies[t];
         let lang = taxonomy.lang.clone();
@@ -536,6 +583,25 @@ impl Renderer<'_> {
                     entries.push((
                         permalink.clone(),
                         json!({"permalink": permalink, "updated": Value::Null, "alternates": []}),
+                    ));
+                }
+            }
+            if section.front.year_archives {
+                for (year, _) in site.years_of(section) {
+                    let alternates: Vec<Value> = section
+                        .translations
+                        .iter()
+                        .filter(|&&t| {
+                            let other = &site.sections[t];
+                            other.front.year_archives
+                                && site.years_of(other).iter().any(|(y, _)| *y == year)
+                        })
+                        .map(|&t| json!({"lang": site.sections[t].lang, "permalink": format!("{}{year}/", site.sections[t].permalink)}))
+                        .collect();
+                    let permalink = format!("{}{year}/", section.permalink);
+                    entries.push((
+                        permalink.clone(),
+                        json!({"permalink": permalink, "updated": Value::Null, "alternates": alternates}),
                     ));
                 }
             }

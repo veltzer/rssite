@@ -155,7 +155,28 @@ pub fn section_view(site: &Site, i: usize, pages: &[Value]) -> Value {
         "paginate_by": section.front.paginate_by,
         "sort_by": section.front.sort_by,
         "is_root": section.is_root(),
+        "year_archives": section.front.year_archives,
+        "years": years_view(site, section),
     })
+}
+
+/// The year archives of a section (`year_archives = true`): newest first,
+/// each with its page count and the URL of its listing. Empty otherwise.
+fn years_view(site: &Site, section: &crate::site::Section) -> Vec<Value> {
+    if !section.front.year_archives {
+        return Vec::new();
+    }
+    site.years_of(section)
+        .into_iter()
+        .map(|(year, pages)| {
+            json!({
+                "year": year,
+                "count": pages.len(),
+                "permalink": format!("{}{year}/", section.permalink),
+                "path": format!("{}{year}/", section.path),
+            })
+        })
+        .collect()
 }
 
 pub fn language_view(site: &Site, code: &str) -> Value {
