@@ -18,7 +18,19 @@ This one design choice gives build systems (rsconstruct, Ninja, Bazel, custom Ma
 
 ## Status
 
-Not yet implemented. This README is the design spec that guides the implementation.
+Implemented. `rssite init && rssite build` produces a site, `rssite plan` prints the manifest below, and the [user guide](docs/src/getting-started.md) covers configuration, content, templates and the manifest. The rest of this README is the design contract the implementation follows.
+
+```text
+rssite plan      print the manifest of every file a build would write, with the sources of each
+rssite build     build the site, writing only the files whose content changed
+rssite check     render every page twice without writing: templates, links, translations, determinism
+rssite query     print the parsed site as JSON
+rssite clean     remove every file the plan lists
+rssite serve     build, serve the output directory, rebuild on change
+rssite init      write a minimal working site
+```
+
+Multi-language sites are the first-class case: every language is explicit and served under its own prefix, pages pair with their translations by name or by key, taxonomy terms pair through a translation table, dates format per language, and a language declares its text direction. [Lessons from zola](docs/src/zola-problems.md) records why each of those is the way it is.
 
 ## The contract
 
@@ -88,12 +100,7 @@ When `rssite build` runs:
 - Every file in the plan's `outputs[]` MUST be produced.
 - No file outside the plan may be produced.
 
-Violations are hard errors (`--strict-manifest`, default on in CI). Silent divergence here corrupts downstream caches.
-
-Two concrete modes:
-
-- `--strict-manifest` (default): divergence → exit non-zero, leave partial output where it is for debugging.
-- `--loose-manifest`: divergence → warning to stderr, continue. Use only for local development while iterating on plugins.
+Divergence here would corrupt downstream caches, so the implementation makes it structurally impossible rather than detecting it: the build iterates the plan's entries and produces each one, so there is no second list of outputs to disagree with the first. A planned file that cannot be produced (a template error, a broken link) fails the build with that file named.
 
 ### 4. Plan and build share the same code path
 
@@ -177,6 +184,7 @@ Other build systems (Ninja generator scripts, Bazel macros, Make meta-rules) can
 - **Sphinx**: configurable, `conf.py` is literal Python (hard to analyze statically), genuinely incremental builds but project-scoped.
 - **Hugo**: very fast, but rebuilds everything on each invocation; no partial build.
 - **Jekyll**: Liquid permalinks + front matter — manifest could in principle be computed, but the tool doesn't expose one.
+- **Zola**: fast single binary, but no plan mode, an asymmetric default language, and a long list of silent failures around i18n and templating. The full list, drawn from building veltzer.org with it, is in [docs/src/zola-problems.md](docs/src/zola-problems.md).
 - **Bazel's `skylib`**: rules declare outputs up front via `attrs.output()` and family. This is exactly the pattern rssite adopts at the tool level.
 
 ## See also
@@ -192,4 +200,4 @@ This is a solo design effort for now. Once the core plan/build split is implemen
 
 ## License
 
-MIT (to be committed with the license file).
+MIT, see [LICENSE](LICENSE).

@@ -7,6 +7,25 @@ description = "Static site generator with a pre-declared output manifest"
 license = "MIT"
 repository = "https://github.com/veltzer/rssite"
 
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+deunicode = "1"
+grass = { version = "0.13", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# Pure-Rust regex engine (no oniguruma C build); the bundled syntax and theme
+# sets are what the fenced code blocks are highlighted with. Features are
+# listed one by one rather than through default-fancy, which would also pull
+# yaml-load and with it the unmaintained yaml-rust (RUSTSEC-2024-0320).
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "html", "regex-fancy"] }
+tera = "1"
+toml = "1"
+walkdir = "2"
+
 # Dev builds favour compile speed: line tables keep file:line in backtraces
 # at a fraction of full debug info's link cost, and dependencies get light
 # optimization once (they rarely change) so tests run faster.

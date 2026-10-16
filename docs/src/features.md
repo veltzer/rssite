@@ -74,6 +74,8 @@ A working list of everything we want a static site generator to do. Scope is del
 
 ## 7. Multi-language / i18n
 
+The requirements here come from a bilingual zola site; see [Lessons from zola](zola-problems.md) for what went wrong there and why each item below exists.
+
 - **Multiple locales** in the same project.
 - **Language-switcher data** exposed to templates.
 - **Per-language front matter** (`title_en`, `title_fr`) OR parallel files (`post.en.md`, `post.fr.md`) — pick one, probably parallel files.
