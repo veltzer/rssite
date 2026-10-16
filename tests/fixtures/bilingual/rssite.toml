@@ -1,0 +1,29 @@
+base_url = "https://example.org/"
+title = "Example"
+description = "An example site in two languages."
+author = "Example Author"
+fallback_language = "en"
+
+[[languages]]
+code = "en"
+name = "English"
+direction = "ltr"
+title = "Example site"
+
+[[languages]]
+code = "he"
+name = "עברית"
+direction = "rtl"
+title = "אתר לדוגמה"
+
+[[taxonomies]]
+name = "tags"
+paginate_by = 2
+feed = true
+translations = "i18n/tags.toml"
+
+[feeds]
+limit = 2
+
+[extra]
+months_note = "unused"

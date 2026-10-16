@@ -1,0 +1,471 @@
+//! End-to-end tests through the binary: the scaffolded site and the
+//! bilingual fixture build, the plan is a manifest, the build is
+//! deterministic, and every silent failure of the previous generator is a
+//! loud error here.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_rssite"))
+}
+
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bilingual")
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rssite-test-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+struct Run {
+    ok: bool,
+    stdout: String,
+    stderr: String,
+}
+
+fn run(dir: &Path, args: &[&str]) -> Run {
+    let output = Command::new(binary())
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Run {
+        ok: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+fn read(dir: &Path, rel: &str) -> String {
+    std::fs::read_to_string(dir.join(rel)).unwrap_or_else(|e| panic!("reading {rel}: {e}"))
+}
+
+fn files_under(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if !dir.is_dir() {
+        return out;
+    }
+    for entry in walk(dir) {
+        out.push(
+            entry
+                .strip_prefix(dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/"),
+        );
+    }
+    out.sort();
+    out
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            out.extend(walk(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out
+}
+
+#[test]
+fn bare_invocation_lists_the_commands() {
+    let dir = temp_dir("bare");
+    let output = Command::new(binary()).current_dir(&dir).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for command in [
+        "plan", "build", "check", "query", "clean", "serve", "init", "version",
+    ] {
+        assert!(
+            stderr.contains(command),
+            "{command} missing from:\n{stderr}"
+        );
+    }
+    assert!(
+        !stderr.contains("--drafts"),
+        "flags belong to --help only:\n{stderr}"
+    );
+    let with_flag = Command::new(binary())
+        .arg("--drafts")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(with_flag.status.code(), Some(2));
+}
+
+#[test]
+fn scaffolded_site_builds_deterministically() {
+    let dir = temp_dir("init");
+    let init = run(&dir, &["init"]);
+    assert!(init.ok, "{}", init.stderr);
+    let build = run(&dir, &["build", "--verify-determinism"]);
+    assert!(build.ok, "{}", build.stderr);
+    let page = read(&dir, "_site/en/blog/hello/index.html");
+    assert!(page.contains("1 January 2026"), "{page}");
+    assert!(page.contains("class=\"highlight\""));
+    assert!(
+        page.contains("href=\"https://example.org/en/tags/meta/\""),
+        "{page}"
+    );
+    assert!(
+        !page.contains("&#x2F;"),
+        "slashes must not be entity-escaped:\n{page}"
+    );
+    assert!(dir.join("_site/en/atom.xml").is_file());
+    assert!(dir.join("_site/sitemap.xml").is_file());
+    assert!(dir.join("_site/style.css").is_file());
+    assert!(dir.join("_site/highlight.css").is_file());
+    assert!(read(&dir, "_site/index.html").contains("url=https://example.org/en/"));
+
+    let check = run(&dir, &["check"]);
+    assert!(check.ok, "{}", check.stderr);
+
+    let plan = run(&dir, &["plan"]);
+    assert!(plan.ok, "{}", plan.stderr);
+    let manifest: serde_json::Value = serde_json::from_str(&plan.stdout).unwrap();
+    assert_eq!(manifest["version"], 1);
+    let outputs = manifest["outputs"].as_array().unwrap();
+    let hello = outputs
+        .iter()
+        .find(|o| o["path"] == "_site/en/blog/hello/index.html")
+        .expect("hello in plan");
+    let sources: Vec<&str> = hello["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert!(sources.contains(&"content/blog/hello.en.md"), "{sources:?}");
+    assert!(sources.contains(&"templates/page.html"), "{sources:?}");
+    assert!(sources.contains(&"rssite.toml"), "{sources:?}");
+    let planned: Vec<&str> = outputs
+        .iter()
+        .map(|o| o["path"].as_str().unwrap())
+        .collect();
+    let built: Vec<String> = files_under(&dir.join("_site"))
+        .iter()
+        .map(|f| format!("_site/{f}"))
+        .collect();
+    assert_eq!(
+        planned,
+        built.iter().map(String::as_str).collect::<Vec<_>>(),
+        "plan and build disagree"
+    );
+
+    let again = run(&dir, &["build"]);
+    assert!(again.ok);
+    assert!(again.stderr.contains("0 written"), "{}", again.stderr);
+
+    let clean = run(&dir, &["clean"]);
+    assert!(clean.ok, "{}", clean.stderr);
+    assert!(files_under(&dir.join("_site")).is_empty());
+}
+
+#[test]
+fn bilingual_fixture_builds() {
+    let dir = temp_dir("bilingual");
+    copy_dir(&fixture(), &dir);
+    let build = run(&dir, &["build", "--verify-determinism"]);
+    assert!(build.ok, "{}", build.stderr);
+
+    let he_first = read(&dir, "_site/he/blog/first/index.html");
+    assert!(he_first.contains("<html lang=\"he\" dir=\"rtl\">"));
+    assert!(
+        he_first.contains("10 ינואר 2026"),
+        "Hebrew month name expected:\n{he_first}"
+    );
+    assert!(he_first.contains("hreflang=\"en\" href=\"https://example.org/en/blog/first/\""));
+    assert!(
+        he_first.contains("class=\"lang\" href=\"https://example.org/en/blog/first/\""),
+        "switcher:\n{he_first}"
+    );
+    assert!(he_first.contains("href=\"https://example.org/he/tags/דת/\""));
+
+    let en_first = read(&dir, "_site/en/blog/first/index.html");
+    assert!(en_first.contains("href=\"https://example.org/en/blog/second/\""));
+    assert!(en_first.contains("href=\"https://example.org/he/blog/second/#top\""));
+    assert!(en_first.contains("rel=\"prev\" href=\"https://example.org/en/blog/second/\""));
+
+    let he_app = read(&dir, "_site/he/apps/index.html");
+    assert!(he_app.contains("<h1>יישום</h1>"));
+    assert!(
+        he_app.contains("const DATA = [1, 2, 3];"),
+        "body_from must pull the English body:\n{he_app}"
+    );
+    assert!(
+        he_app.contains("*not emphasised*"),
+        "raw HTML must not be markdown-processed"
+    );
+
+    let about = read(&dir, "_site/en/about/index.html");
+    assert!(about.contains("this page is called About and the nav says Blog"));
+
+    let second = read(&dir, "_site/en/blog/second/index.html");
+    assert!(second.contains("id=\"heading-one\"") && second.contains("id=\"heading-one-1\""));
+
+    assert!(dir.join("_site/en/blog/page/2/index.html").is_file());
+    assert!(
+        !dir.join("_site/en/blog/page/1").exists(),
+        "no /page/1/ stub"
+    );
+    let page2 = read(&dir, "_site/en/blog/page/2/index.html");
+    assert!(page2.contains("rel=\"prev\" href=\"https://example.org/en/blog/\""));
+
+    let he_tag = read(&dir, "_site/he/tags/דת/index.html");
+    assert!(
+        he_tag.contains("hreflang=\"en\" href=\"https://example.org/en/tags/religion/\""),
+        "term translations:\n{he_tag}"
+    );
+    assert!(
+        dir.join("_site/en/tags/religion/page/2/index.html")
+            .is_file()
+    );
+    assert!(dir.join("_site/en/tags/religion/atom.xml").is_file());
+
+    assert!(
+        read(&dir, "_site/legacy/third.html").contains("url=https://example.org/en/blog/third/")
+    );
+    assert!(
+        read(&dir, "_site/old/third/index.html")
+            .contains("rel=\"canonical\" href=\"https://example.org/en/blog/third/\"")
+    );
+
+    let sitemap = read(&dir, "_site/sitemap.xml");
+    assert!(sitemap.contains("<loc>https://example.org/he/blog/רביעי/</loc>"));
+    assert!(sitemap.contains("hreflang=\"he\" href=\"https://example.org/he/blog/רביעי/\""));
+    assert!(!sitemap.contains("/page/1/"));
+
+    assert!(read(&dir, "_site/style.css").contains("40rem"));
+    assert!(
+        dir.join("_site/en/blog/data.csv").is_file()
+            && dir.join("_site/he/blog/data.csv").is_file()
+    );
+    assert!(read(&dir, "_site/index.html").contains("hreflang=\"he\""));
+    assert!(read(&dir, "_site/robots.txt").contains("Sitemap: https://example.org/sitemap.xml"));
+
+    let feed = read(&dir, "_site/en/atom.xml");
+    assert_eq!(
+        feed.matches("<entry").count(),
+        2,
+        "feeds.limit = 2:\n{feed}"
+    );
+    assert!(feed.contains("<updated>2026-04-01T00:00:00+00:00</updated>"));
+
+    let query = run(&dir, &["query"]);
+    assert!(query.ok, "{}", query.stderr);
+    let model: serde_json::Value = serde_json::from_str(&query.stdout).unwrap();
+    assert_eq!(model["languages"].as_array().unwrap().len(), 2);
+    let renamed = model["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["relative_path"] == "blog/renamed.en.md")
+        .unwrap();
+    let paired: Vec<&str> = renamed["translations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["lang"].as_str().unwrap())
+        .collect();
+    assert_eq!(paired, vec!["en", "he"], "translation_key pairing");
+}
+
+#[test]
+fn drafts_are_excluded_unless_asked() {
+    let dir = temp_dir("drafts");
+    copy_dir(&fixture(), &dir);
+    std::fs::write(
+        dir.join("content/blog/draft.en.md"),
+        "+++\ntitle = \"Draft\"\ndate = 2026-05-01\ndraft = true\n+++\n\nnot yet\n",
+    )
+    .unwrap();
+    assert!(run(&dir, &["build"]).ok);
+    assert!(!dir.join("_site/en/blog/draft").exists());
+    assert!(run(&dir, &["build", "--drafts"]).ok);
+    assert!(dir.join("_site/en/blog/draft/index.html").is_file());
+}
+
+fn expect_error(name: &str, mutate: impl FnOnce(&Path), needle: &str) {
+    let dir = temp_dir(name);
+    copy_dir(&fixture(), &dir);
+    mutate(&dir);
+    let build = run(&dir, &["check"]);
+    assert!(!build.ok, "expected {name} to fail");
+    assert!(
+        build.stderr.contains(needle),
+        "expected {needle:?} in:\n{}",
+        build.stderr
+    );
+}
+
+#[test]
+fn unsuffixed_content_file_is_an_error() {
+    expect_error(
+        "nolang",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/nolang.md"),
+                "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n",
+            )
+            .unwrap()
+        },
+        "language suffix",
+    );
+}
+
+#[test]
+fn unknown_language_suffix_is_an_error() {
+    expect_error(
+        "frlang",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/post.fr.md"),
+                "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n",
+            )
+            .unwrap()
+        },
+        "not a configured language",
+    );
+}
+
+#[test]
+fn broken_internal_link_is_an_error() {
+    expect_error(
+        "brokenlink",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/broken.en.md"),
+                "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n[x](@/blog/missing.md)\n",
+            )
+            .unwrap()
+        },
+        "no content file matches",
+    );
+}
+
+#[test]
+fn missing_translation_key_is_an_error() {
+    expect_error(
+        "transkey",
+        |dir| {
+            let path = dir.join("templates/page.html");
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("{{ page.title }}", "{{ trans(key=\"nope\") }}");
+            std::fs::write(path, text).unwrap();
+        },
+        "translation key \"nope\" is missing",
+    );
+}
+
+#[test]
+fn clock_is_not_available_to_templates() {
+    expect_error(
+        "now",
+        |dir| {
+            let path = dir.join("templates/base.html");
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("<main>", "<main>{{ now() }}");
+            std::fs::write(path, text).unwrap();
+        },
+        "now() is not available",
+    );
+}
+
+#[test]
+fn unknown_config_key_is_an_error() {
+    expect_error(
+        "configkey",
+        |dir| {
+            let path = dir.join("rssite.toml");
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("author = ", "output_dirr = \"x\"\nauthor = ");
+            std::fs::write(path, text).unwrap();
+        },
+        "unknown field",
+    );
+}
+
+#[test]
+fn undeclared_taxonomy_is_an_error() {
+    expect_error(
+        "taxonomy",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/cat.en.md"),
+                "+++\ntitle = \"x\"\ndate = 2026-01-01\n[taxonomies]\ncategories = [\"a\"]\n+++\n",
+            )
+            .unwrap()
+        },
+        "not declared in rssite.toml",
+    );
+}
+
+#[test]
+fn undated_page_in_date_sorted_section_is_an_error() {
+    expect_error(
+        "undated",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/undated.en.md"),
+                "+++\ntitle = \"x\"\n+++\n",
+            )
+            .unwrap()
+        },
+        "sorts by date but these pages have none",
+    );
+}
+
+#[test]
+fn colliding_urls_are_an_error() {
+    expect_error(
+        "collision",
+        |dir| {
+            std::fs::write(
+                dir.join("content/blog/other.en.md"),
+                "+++\ntitle = \"x\"\ndate = 2026-01-01\nslug = \"first\"\n+++\n",
+            )
+            .unwrap()
+        },
+        "both render to",
+    );
+}
+
+#[test]
+fn unknown_static_url_is_an_error() {
+    expect_error(
+        "geturl",
+        |dir| {
+            let path = dir.join("templates/base.html");
+            let text = std::fs::read_to_string(&path).unwrap().replace(
+                "get_url(path=\"style.css\")",
+                "get_url(path=\"missing.css\")",
+            );
+            std::fs::write(path, text).unwrap();
+        },
+        "not a file this build produces",
+    );
+}

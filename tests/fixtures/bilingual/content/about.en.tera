@@ -1,0 +1,6 @@
++++
+title = "About"
+template = "page.html"
+date = 2026-01-01
++++
+<p>Rendered as a template: this page is called {{ page.title }} and the nav says {{ trans(key="nav_blog") }}.</p>

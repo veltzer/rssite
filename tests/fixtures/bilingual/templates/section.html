@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ section.title }}</h1>
+{%- set posts = section.pages %}{% if paginator %}{% set posts = paginator.pages %}{% endif %}
+<ul>{% for post in posts %}<li><a href="{{ post.permalink }}">{{ post.title }}</a> <time>{{ post.date | date(format="%-d %B %Y") }}</time></li>{% endfor %}</ul>
+{%- if paginator %}<nav class="pager">{% if paginator.previous %}<a rel="prev" href="{{ paginator.previous }}">prev</a>{% endif %} {{ paginator.current_index }}/{{ paginator.number_pagers }} {% if paginator.next %}<a rel="next" href="{{ paginator.next }}">next</a>{% endif %}</nav>{% endif %}
+{% endblock %}

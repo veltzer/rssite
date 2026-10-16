@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ section.title }}</h1>
+{{ section.content | safe }}
+{%- set blog = get_section(path="blog/_index.md") %}
+<ul>{% for post in blog.pages %}<li><a href="{{ post.permalink }}">{{ post.title }}</a></li>{% endfor %}</ul>
+{% endblock %}

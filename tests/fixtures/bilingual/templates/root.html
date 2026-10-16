@@ -1,0 +1,3 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>{{ config.title }}</title></head>
+<body>{% for entry in languages %}<a href="{{ entry.url_prefix }}" hreflang="{{ entry.code }}">{{ entry.name }}</a>{% endfor %}</body></html>

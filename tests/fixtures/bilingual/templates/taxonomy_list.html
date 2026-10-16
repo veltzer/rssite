@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ trans(key="nav_tags") }}</h1>
+<ul>{% for term in terms %}<li><a href="{{ term.permalink }}">{{ term.name }}</a> {{ term.page_count }}</li>{% endfor %}</ul>
+{% endblock %}

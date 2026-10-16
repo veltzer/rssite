@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ trans(key="tagged") }} {{ term.name }}</h1>
+{%- set posts = term.pages %}{% if paginator %}{% set posts = paginator.pages %}{% endif %}
+<ul>{% for post in posts %}<li><a href="{{ post.permalink }}">{{ post.title }}</a></li>{% endfor %}</ul>
+{%- if paginator and paginator.next %}<a rel="next" href="{{ paginator.next }}">next</a>{% endif %}
+{% endblock %}

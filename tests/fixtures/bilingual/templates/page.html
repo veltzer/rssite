@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }}{% endblock %}
+{% block content %}
+<article>
+<h1>{{ page.title }}</h1>
+<time datetime="{{ page.date }}">{{ page.date | date(format="%-d %B %Y") }}</time>
+{%- for tag in page.taxonomies.tags %} <a class="tag" href="{{ tag.permalink }}">{{ tag.name }}</a>{% endfor %}
+{{ page.content | safe }}
+{%- if page.previous %}<a rel="prev" href="{{ page.previous.permalink }}">{{ page.previous.title }}</a>{% endif %}
+{%- if page.next %}<a rel="next" href="{{ page.next.permalink }}">{{ page.next.title }}</a>{% endif %}
+</article>
+{% endblock %}

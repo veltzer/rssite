@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ language.direction }}">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}{{ language.title }}{% endblock %}</title>
+<link rel="canonical" href="{{ current_url }}">
+{%- for alternate in translations %}
+<link rel="alternate" hreflang="{{ alternate.lang }}" href="{{ alternate.permalink }}">
+{%- endfor %}
+<link rel="stylesheet" href="{{ get_url(path="style.css") }}">
+</head>
+<body>
+<nav>
+<a href="{{ get_url(path="@/blog/_index.md") }}">{{ trans(key="nav_blog") }}</a>
+<a href="{{ get_url(path=language.url_prefix ~ "tags/") }}">{{ trans(key="nav_tags") }}</a>
+{%- for entry in languages %}
+<a class="lang" href="{{ alternates | get(key=entry.code, default=entry.url_prefix) }}" hreflang="{{ entry.code }}">{{ entry.name }}</a>
+{%- endfor %}
+</nav>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>
