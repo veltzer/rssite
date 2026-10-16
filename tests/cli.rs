@@ -220,6 +220,10 @@ fn bilingual_fixture_builds() {
 
     let about = read(&dir, "_site/en/about/index.html");
     assert!(about.contains("this page is called About and the nav says Blog"));
+    assert!(
+        about.contains(&format!("made by rssite {}", env!("CARGO_PKG_VERSION"))),
+        "the generator names itself:\n{about}"
+    );
 
     let second = read(&dir, "_site/en/blog/second/index.html");
     assert!(second.contains("id=\"heading-one\"") && second.contains("id=\"heading-one-1\""));

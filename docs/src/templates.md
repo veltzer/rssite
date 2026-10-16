@@ -31,6 +31,7 @@ Every template gets:
 - `current_path` and `current_url`.
 - `translations`: this document in every language it exists in, as a list of `{lang, permalink, path, title}` in configured language order.
 - `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.url_prefix) }}`.
+- `rssite`: the generator, `{name, version, url}`, for a "made by" line in a footer.
 
 Pages get `page` and `section` (the parent, without its page list). Sections get `section` with `pages` and `subsections`, and `paginator` when paginated. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
 

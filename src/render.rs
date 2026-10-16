@@ -212,6 +212,17 @@ impl Renderer<'_> {
             "current_url",
             &format!("{}{}", self.site.config.base_url, current_path),
         );
+        // The generator itself, for a "made by" line. A build's output is a
+        // function of its sources and the tool, and the tool's version is
+        // part of that function, so naming it is deterministic.
+        context.insert(
+            "rssite",
+            &json!({
+                "name": "rssite",
+                "version": env!("CARGO_PKG_VERSION"),
+                "url": "https://github.com/veltzer/rssite",
+            }),
+        );
         context
     }
 
