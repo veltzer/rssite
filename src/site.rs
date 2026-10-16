@@ -100,6 +100,27 @@ pub struct TaxonomyModel {
 pub struct Templates {
     /// Template name (relative path with `/`) to source text.
     pub files: BTreeMap<String, String>,
+    /// Template name to the file it was read from, relative to the site
+    /// root: the site's own directory or the theme's.
+    pub origins: BTreeMap<String, String>,
+}
+
+/// A file under a root directory (`static/` or `sass/`, the site's or the
+/// theme's) with its path below that root, which names its output.
+#[derive(Clone, Debug)]
+pub struct SourceFile {
+    pub path: PathBuf,
+    pub rel: String,
+}
+
+/// A file a `[[publish]]` entry copies: where it is, where it goes.
+#[derive(Clone, Debug)]
+pub struct Published {
+    pub path: PathBuf,
+    /// Relative to the output root.
+    pub out: String,
+    /// Relative to the site root.
+    pub source: String,
 }
 
 impl Templates {
@@ -164,8 +185,9 @@ pub struct Site {
     pub sections: Vec<Section>,
     pub taxonomies: Vec<TaxonomyModel>,
     pub templates: Templates,
-    pub static_files: Vec<PathBuf>,
-    pub sass_files: Vec<PathBuf>,
+    pub static_files: Vec<SourceFile>,
+    pub sass_files: Vec<SourceFile>,
+    pub published: Vec<Published>,
     pub assets: Vec<ContentAsset>,
     /// Every content file, relative to the site root.
     pub content_files: Vec<String>,
@@ -192,12 +214,45 @@ impl Site {
         let config = Config::load(&root)?;
         let codes = config.language_codes();
 
+        let theme_dir = match &config.theme {
+            Some(name) => {
+                let dir = root.join(&config.themes_dir).join(name);
+                if !dir.is_dir() {
+                    bail!(
+                        "theme {name:?} not found: {}/{name}/ is not a directory",
+                        config.themes_dir
+                    );
+                }
+                Some(dir)
+            }
+            None => None,
+        };
+        // Translation roots, the theme's first so the site's override it.
+        let i18n_dirs: Vec<PathBuf> = theme_dir
+            .iter()
+            .map(|d| d.join(&config.i18n_dir))
+            .chain(std::iter::once(root.join(&config.i18n_dir)))
+            .collect();
+        if let Some(theme) = &theme_dir {
+            // A theme speaking a language the site does not declare is a
+            // mistake on one side or the other, not something to skip.
+            for path in crate::util::walk_files(&theme.join(&config.i18n_dir))? {
+                let stem = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let is_toml = path.extension().is_some_and(|e| e == "toml");
+                if is_toml && !codes.contains(&stem) {
+                    bail!(
+                        "{} is for language {stem:?}, which the site does not declare",
+                        crate::util::rel(&path, &root)
+                    );
+                }
+            }
+        }
         let mut i18n = BTreeMap::new();
         for code in &codes {
-            i18n.insert(
-                code.clone(),
-                Translations::load(&root.join(&config.i18n_dir), code)?,
-            );
+            i18n.insert(code.clone(), Translations::load_layered(&i18n_dirs, code)?);
         }
 
         let content_dir = root.join(&config.content_dir);
@@ -214,6 +269,7 @@ impl Site {
             templates: Templates::default(),
             static_files: Vec::new(),
             sass_files: Vec::new(),
+            published: Vec::new(),
             assets,
             content_files: Vec::new(),
             page_lookup: BTreeMap::new(),
@@ -231,9 +287,82 @@ impl Site {
         site.build_taxonomies()?;
         site.render_bodies()?;
         site.load_templates()?;
-        site.static_files = crate::util::walk_files(&root.join(&site.config.static_dir))?;
-        site.sass_files = crate::util::walk_files(&root.join(&site.config.sass_dir))?;
+        site.static_files = site.layered_files(&site.config.static_dir)?;
+        site.sass_files = site.layered_files(&site.config.sass_dir)?;
+        site.published = site.published_files()?;
         Ok(site)
+    }
+
+    /// The theme's directory, when a theme is configured.
+    pub fn theme_dir(&self) -> Option<PathBuf> {
+        self.config
+            .theme
+            .as_ref()
+            .map(|name| self.root.join(&self.config.themes_dir).join(name))
+    }
+
+    /// The roots a layered directory (`templates`, `static`, `sass`, `i18n`)
+    /// is read from: the theme's first, the site's last, so the site wins.
+    fn roots(&self) -> Vec<PathBuf> {
+        self.theme_dir()
+            .into_iter()
+            .chain(std::iter::once(self.root.clone()))
+            .collect()
+    }
+
+    /// The files under `<root>/<dir>` for every root, keyed by their path
+    /// below the directory; a later root's file replaces an earlier one's.
+    fn layered_files(&self, dir: &str) -> Result<Vec<SourceFile>> {
+        let mut by_rel: BTreeMap<String, PathBuf> = BTreeMap::new();
+        for root in self.roots() {
+            let base = root.join(dir);
+            for path in crate::util::walk_files(&base)? {
+                by_rel.insert(crate::util::rel(&path, &base), path);
+            }
+        }
+        Ok(by_rel
+            .into_iter()
+            .map(|(rel, path)| SourceFile { path, rel })
+            .collect())
+    }
+
+    /// The files every `[[publish]]` entry copies, in config then path order.
+    fn published_files(&self) -> Result<Vec<Published>> {
+        let mut out = Vec::new();
+        for entry in &self.config.publish {
+            let from = self.root.join(&entry.from);
+            if !from.is_dir() {
+                bail!(
+                    "[[publish]] from = {:?} is not a directory (a submodule not checked out?)",
+                    entry.from
+                );
+            }
+            let mut matched = 0usize;
+            for path in crate::util::walk_files(&from)? {
+                let rel = crate::util::rel(&path, &from);
+                let mut hit = false;
+                for pattern in &entry.files {
+                    hit |= crate::util::glob_match(pattern, &rel)?;
+                }
+                if !hit {
+                    continue;
+                }
+                matched += 1;
+                out.push(Published {
+                    out: format!("{}/{rel}", entry.to),
+                    source: format!("{}/{rel}", entry.from),
+                    path,
+                });
+            }
+            if matched == 0 {
+                bail!(
+                    "[[publish]] from = {:?} matches no file with files = {:?}",
+                    entry.from,
+                    entry.files
+                );
+            }
+        }
+        Ok(out)
     }
 
     pub fn rel(&self, path: &Path) -> String {
@@ -920,14 +1049,20 @@ impl Site {
         }
     }
 
+    /// The theme's templates first, then the site's, which replace a theme
+    /// template of the same name.
     fn load_templates(&mut self) -> Result<()> {
-        let dir = self.root.join(&self.config.templates_dir);
         let mut files = BTreeMap::new();
-        for path in crate::util::walk_files(&dir)? {
-            let name = crate::util::rel(&path, &dir);
-            files.insert(name, crate::util::read(&path)?);
+        let mut origins = BTreeMap::new();
+        for root in self.roots() {
+            let dir = root.join(&self.config.templates_dir);
+            for path in crate::util::walk_files(&dir)? {
+                let name = crate::util::rel(&path, &dir);
+                files.insert(name.clone(), crate::util::read(&path)?);
+                origins.insert(name, self.rel(&path));
+            }
         }
-        self.templates = Templates { files };
+        self.templates = Templates { files, origins };
         Ok(())
     }
 
@@ -958,11 +1093,12 @@ impl Site {
         self.config.language(lang).is_some_and(|l| l.generate_feeds)
     }
 
-    pub fn i18n_source(&self, lang: &str) -> Option<String> {
+    /// The translation files of `lang` that exist, theme's then site's.
+    pub fn i18n_sources(&self, lang: &str) -> Vec<String> {
         self.i18n
             .get(lang)
-            .and_then(|t| t.path.as_ref())
-            .map(|p| self.rel(p))
+            .map(|t| t.paths.iter().map(|p| self.rel(p)).collect())
+            .unwrap_or_default()
     }
 
     pub fn template_sources(&self, name: &str) -> (BTreeSet<String>, bool, Vec<String>) {
@@ -974,7 +1110,7 @@ impl Site {
             let text = &self.templates.files[template];
             cross |= reads_other_pages(text);
             data.extend(load_data_paths(text));
-            sources.insert(format!("{}/{}", self.config.templates_dir, template));
+            sources.insert(self.templates.origins[template].clone());
         }
         (sources, cross, data)
     }

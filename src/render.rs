@@ -322,8 +322,13 @@ impl Renderer<'_> {
                 std::fs::read(path).with_context(|| format!("reading {}", path.display()))?
             }
             Kind::Sass(path) => {
-                let options = grass::Options::default()
+                // The site's sass directory first, then the theme's, so an
+                // `@use "x"` finds the site's override before the theme's.
+                let mut options = grass::Options::default()
                     .load_path(self.site.root.join(&self.site.config.sass_dir));
+                if let Some(theme) = self.site.theme_dir() {
+                    options = options.load_path(theme.join(&self.site.config.sass_dir));
+                }
                 grass::from_path(path, &options)
                     .map_err(|e| anyhow::anyhow!("compiling {}: {e}", self.site.rel(path)))?
                     .into_bytes()

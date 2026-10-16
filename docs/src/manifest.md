@@ -25,12 +25,12 @@ Paths are relative to the site root, sorted, and unique: two outputs claiming on
 
 ## What a file depends on
 
-- A page depends on its own file, its translations, the file it takes its body from, every content file it links to, its section index, its template with everything that template extends, includes or imports, the literal `load_data` paths in those, the configuration, and the language's translation file.
+- A page depends on its own file, its translations, the file it takes its body from, every content file it links to, its section index, its template with everything that template extends, includes or imports, the literal `load_data` paths in those, the configuration, and the language's translation files (the theme's and the site's, when both exist). A template or a static file that comes from the theme is listed under its theme path, so the manifest says which root was used.
 - When a page's template reads other pages (`get_page`, `get_section`, `get_taxonomy`, `section.pages`, `page.previous`, `page.next` and the like), the whole content tree is added, because any file can then change the output.
 - A section listing, a taxonomy page and a feed depend on every content file of their language.
 - The sitemap depends on every content file and the configuration.
 - A compiled stylesheet depends on every file under `sass/`, since any of them can be imported.
-- A static file and a content asset depend on themselves.
+- A static file, a published file (`[[publish]]`) and a content asset depend on themselves.
 
 ## Using it from a build system
 

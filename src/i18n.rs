@@ -85,13 +85,38 @@ impl DateNames {
 #[derive(Clone, Debug)]
 pub struct Translations {
     pub code: String,
-    /// The file these came from, when it exists.
-    pub path: Option<PathBuf>,
+    /// The files these came from, in the order they were layered (a
+    /// theme's first, the site's last); empty when none exists.
+    pub paths: Vec<PathBuf>,
     pub strings: BTreeMap<String, String>,
     pub dates: DateNames,
 }
 
 impl Translations {
+    /// Load `<dir>/<code>.toml` from each of `dirs` in turn, later ones
+    /// overriding earlier ones key by key (a theme's directory first, the
+    /// site's last). A missing file contributes nothing; no file at all is
+    /// an empty table with English date names, so a single-language site
+    /// needs no i18n directory.
+    pub fn load_layered(dirs: &[PathBuf], code: &str) -> Result<Translations> {
+        let mut merged = Translations {
+            code: code.to_owned(),
+            paths: Vec::new(),
+            strings: BTreeMap::new(),
+            dates: DateNames::english(),
+        };
+        for dir in dirs {
+            let layer = Self::load(dir, code)?;
+            if layer.paths.is_empty() {
+                continue;
+            }
+            merged.paths.extend(layer.paths);
+            merged.strings.extend(layer.strings);
+            merged.dates = layer.dates;
+        }
+        Ok(merged)
+    }
+
     /// Load `<dir>/<code>.toml`. A missing file is an empty table with
     /// English date names, so a single-language site needs no i18n directory.
     pub fn load(dir: &Path, code: &str) -> Result<Translations> {
@@ -99,7 +124,7 @@ impl Translations {
         if !path.is_file() {
             return Ok(Translations {
                 code: code.to_owned(),
-                path: None,
+                paths: Vec::new(),
                 strings: BTreeMap::new(),
                 dates: DateNames::english(),
             });
@@ -157,7 +182,7 @@ impl Translations {
         }
         Ok(Translations {
             code: code.to_owned(),
-            path: Some(path),
+            paths: vec![path],
             strings,
             dates,
         })
@@ -169,11 +194,10 @@ impl Translations {
         match self.strings.get(key) {
             Some(s) => Ok(s),
             None => {
-                let file = self
-                    .path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| format!("i18n/{}.toml (no such file)", self.code));
+                let file = match self.paths.last() {
+                    Some(p) => p.display().to_string(),
+                    None => format!("i18n/{}.toml (no such file)", self.code),
+                };
                 bail!(
                     "translation key {key:?} is missing for language {:?} in {file}",
                     self.code

@@ -32,6 +32,19 @@ pub struct Config {
     pub sass_dir: String,
     #[serde(default = "default_i18n_dir")]
     pub i18n_dir: String,
+    /// A theme: `<themes_dir>/<theme>/` holds `templates`, `sass`, `static`
+    /// and `i18n` directories that sit behind the site's own. The site's
+    /// file of the same name wins, file by file; the manifest names the
+    /// file that was used, so an override is visible rather than silent.
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default = "default_themes_dir")]
+    pub themes_dir: String,
+    /// Directories published into the output as they are: a submodule's
+    /// stylesheets and fonts, say. Each file is its own output with itself
+    /// as its only source.
+    #[serde(default)]
+    pub publish: Vec<Publish>,
     /// The language the root redirect and the global `404.html` use. Defaults
     /// to the first configured language. It is a fallback for hosts that
     /// cannot negotiate, not a "default language": every language is
@@ -53,6 +66,20 @@ pub struct Config {
     /// Free-form values exposed to templates as `config.extra`.
     #[serde(default)]
     pub extra: toml::Table,
+}
+
+/// One `[[publish]]` entry: the files of `from` matching `files` are written
+/// under `to` in the output.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Publish {
+    /// A directory relative to the site root.
+    pub from: String,
+    /// A directory relative to the output root.
+    pub to: String,
+    /// Globs relative to `from` (`*`, `**` and `?`); everything by default.
+    #[serde(default = "default_publish_files")]
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -191,6 +218,12 @@ fn default_sass_dir() -> String {
 fn default_i18n_dir() -> String {
     "i18n".into()
 }
+fn default_themes_dir() -> String {
+    "themes".into()
+}
+fn default_publish_files() -> Vec<String> {
+    vec!["**/*".into()]
+}
 fn default_paginate_path() -> String {
     "page".into()
 }
@@ -285,9 +318,42 @@ impl Config {
             &self.sass_dir,
             &self.i18n_dir,
             &self.output_dir,
+            &self.themes_dir,
         ] {
             if dir.is_empty() || Path::new(dir).is_absolute() {
                 bail!("{CONFIG_FILE}: directory {dir:?} must be a relative, non-empty path");
+            }
+        }
+        if let Some(theme) = &self.theme
+            && (theme.is_empty() || theme.contains('/') || theme.contains('\\') || theme == "..")
+        {
+            bail!(
+                "{CONFIG_FILE}: theme {theme:?} must be a directory name under {}",
+                self.themes_dir
+            );
+        }
+        for entry in &mut self.publish {
+            for (what, value) in [("from", &entry.from), ("to", &entry.to)] {
+                if value.is_empty()
+                    || Path::new(value).is_absolute()
+                    || value.split('/').any(|part| part == "..")
+                {
+                    bail!(
+                        "{CONFIG_FILE}: [[publish]] {what} = {value:?} must be a relative path inside the site"
+                    );
+                }
+            }
+            while entry.to.ends_with('/') {
+                entry.to.pop();
+            }
+            while entry.from.ends_with('/') {
+                entry.from.pop();
+            }
+            if entry.files.is_empty() {
+                bail!(
+                    "{CONFIG_FILE}: [[publish]] from = {:?} lists no files",
+                    entry.from
+                );
             }
         }
         Ok(())

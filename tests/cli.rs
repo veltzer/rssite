@@ -469,3 +469,260 @@ fn unknown_static_url_is_an_error() {
         "not a file this build produces",
     );
 }
+
+// ── themes and published directories ──────────────────────────────────────
+
+/// Top-level keys must precede every table in TOML, so a key goes first.
+fn prepend_config(dir: &Path, text: &str) {
+    let path = dir.join("rssite.toml");
+    let old = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{text}\n{old}")).unwrap();
+}
+
+/// A table goes last; a new header closes whatever table came before.
+fn append_config(dir: &Path, text: &str) {
+    let path = dir.join("rssite.toml");
+    let old = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{old}\n{text}\n")).unwrap();
+}
+
+fn write(dir: &Path, rel: &str, text: &str) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+fn sources_of(manifest: &serde_json::Value, path: &str) -> Vec<String> {
+    manifest["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["path"] == path)
+        .unwrap_or_else(|| panic!("no output {path} in the manifest"))["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn theme_directory_sits_behind_the_site() {
+    let dir = temp_dir("theme");
+    copy_dir(&fixture(), &dir);
+    prepend_config(&dir, "theme = \"fleet\"");
+    // The theme supplies what the site lacks: the term template moves there.
+    std::fs::rename(dir.join("templates/taxonomy_single.html"), {
+        std::fs::create_dir_all(dir.join("themes/fleet/templates")).unwrap();
+        dir.join("themes/fleet/templates/taxonomy_single.html")
+    })
+    .unwrap();
+    // The site's file wins over the theme's of the same name.
+    write(
+        &dir,
+        "themes/fleet/templates/base.html",
+        "THEME BASE {% block content %}{% endblock %}",
+    );
+    write(&dir, "themes/fleet/static/favicon.svg", "<svg>theme</svg>");
+    write(
+        &dir,
+        "themes/fleet/static/theme-only.txt",
+        "from the theme\n",
+    );
+    write(
+        &dir,
+        "themes/fleet/sass/extra.scss",
+        ".theme { color: red; }\n",
+    );
+    write(&dir, "themes/fleet/sass/_tokens.scss", "$accent: blue;\n");
+    // The site's stylesheet can use a theme partial, and a theme stylesheet
+    // the site's.
+    let style = read(&dir, "sass/style.scss");
+    write(
+        &dir,
+        "sass/style.scss",
+        &format!("@use \"tokens\";\n{style}\n.site {{ color: tokens.$accent; }}\n"),
+    );
+    write(
+        &dir,
+        "themes/fleet/sass/more.scss",
+        "@use \"vars\";\n.more { margin: 0; }\n",
+    );
+    // Translations layer: the site's key wins, the theme's extra key shows.
+    write(
+        &dir,
+        "themes/fleet/i18n/en.toml",
+        "nav_blog = \"WRONG\"\ntheme_key = \"from theme\"\n",
+    );
+    write(
+        &dir,
+        "themes/fleet/i18n/he.toml",
+        "theme_key = \"מהערכה\"\n",
+    );
+    let base = read(&dir, "templates/base.html");
+    write(
+        &dir,
+        "templates/base.html",
+        &base.replace(
+            "</body>",
+            "<p id=\"theme\">{{ trans(key=\"theme_key\") }}</p></body>",
+        ),
+    );
+
+    let build = run(&dir, &["build", "--verify-determinism"]);
+    assert!(build.ok, "{}", build.stderr);
+
+    let en_first = read(&dir, "_site/en/blog/first/index.html");
+    assert!(
+        !en_first.contains("THEME BASE"),
+        "the site's base.html must win"
+    );
+    assert!(
+        en_first.contains(">Blog<"),
+        "the site's translation must win:\n{en_first}"
+    );
+    assert!(
+        en_first.contains("from theme"),
+        "the theme's extra key must show:\n{en_first}"
+    );
+    assert!(read(&dir, "_site/he/blog/first/index.html").contains("מהערכה"));
+    assert_eq!(
+        read(&dir, "_site/favicon.svg"),
+        read(&dir, "static/favicon.svg")
+    );
+    assert_eq!(read(&dir, "_site/theme-only.txt"), "from the theme\n");
+    assert!(read(&dir, "_site/extra.css").contains(".theme"));
+    assert!(read(&dir, "_site/more.css").contains(".more"));
+    assert!(read(&dir, "_site/style.css").contains("blue"));
+    assert!(dir.join("_site/en/tags/index.html").is_file());
+
+    let plan = run(&dir, &["plan"]);
+    assert!(plan.ok, "{}", plan.stderr);
+    let manifest: serde_json::Value = serde_json::from_str(&plan.stdout).unwrap();
+    let first = sources_of(&manifest, "_site/en/blog/first/index.html");
+    assert!(
+        first.contains(&"templates/base.html".to_owned()),
+        "{first:?}"
+    );
+    assert!(
+        !first.contains(&"themes/fleet/templates/base.html".to_owned()),
+        "{first:?}"
+    );
+    assert!(
+        first.contains(&"i18n/en.toml".to_owned())
+            && first.contains(&"themes/fleet/i18n/en.toml".to_owned()),
+        "{first:?}"
+    );
+    let tags = sources_of(&manifest, "_site/en/tags/index.html");
+    assert!(
+        tags.contains(&"templates/taxonomy_list.html".to_owned()),
+        "{tags:?}"
+    );
+    let term = manifest["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| {
+            let path = o["path"].as_str().unwrap();
+            path.starts_with("_site/en/tags/")
+                && path.ends_with("/index.html")
+                && path != "_site/en/tags/index.html"
+                && !path.contains("/page/")
+        })
+        .expect("a term page");
+    assert!(
+        term["sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == "themes/fleet/templates/taxonomy_single.html"),
+        "{term}"
+    );
+    assert_eq!(
+        sources_of(&manifest, "_site/theme-only.txt"),
+        ["themes/fleet/static/theme-only.txt"]
+    );
+    assert_eq!(
+        sources_of(&manifest, "_site/favicon.svg"),
+        ["static/favicon.svg"]
+    );
+    let extra = sources_of(&manifest, "_site/extra.css");
+    assert!(
+        extra.contains(&"sass/_vars.scss".to_owned())
+            && extra.contains(&"themes/fleet/sass/extra.scss".to_owned()),
+        "{extra:?}"
+    );
+}
+
+#[test]
+fn missing_theme_is_an_error() {
+    expect_error(
+        "theme-missing",
+        |dir| prepend_config(dir, "theme = \"nope\""),
+        "theme \"nope\" not found",
+    );
+}
+
+#[test]
+fn theme_translation_for_an_undeclared_language_is_an_error() {
+    expect_error(
+        "theme-fr",
+        |dir| {
+            prepend_config(dir, "theme = \"fleet\"");
+            write(dir, "themes/fleet/i18n/fr.toml", "x = \"y\"\n");
+        },
+        "themes/fleet/i18n/fr.toml is for language \"fr\"",
+    );
+}
+
+#[test]
+fn published_directories_are_copied_as_they_are() {
+    let dir = temp_dir("publish");
+    copy_dir(&fixture(), &dir);
+    append_config(
+        &dir,
+        "[[publish]]\nfrom = \"shared/tokens\"\nto = \"tokens\"\nfiles = [\"*.css\", \"fonts/*\"]",
+    );
+    write(&dir, "shared/tokens/a.css", ":root { --x: 1; }\n");
+    write(&dir, "shared/tokens/b.txt", "not published\n");
+    write(&dir, "shared/tokens/fonts/x.woff2", "font bytes\n");
+    write(&dir, "shared/tokens/fonts/deep/y.woff2", "too deep\n");
+
+    let build = run(&dir, &["build", "--verify-determinism"]);
+    assert!(build.ok, "{}", build.stderr);
+    assert_eq!(read(&dir, "_site/tokens/a.css"), ":root { --x: 1; }\n");
+    assert_eq!(read(&dir, "_site/tokens/fonts/x.woff2"), "font bytes\n");
+    assert!(!dir.join("_site/tokens/b.txt").exists());
+    assert!(!dir.join("_site/tokens/fonts/deep").exists());
+
+    let plan = run(&dir, &["plan"]);
+    let manifest: serde_json::Value = serde_json::from_str(&plan.stdout).unwrap();
+    assert_eq!(
+        sources_of(&manifest, "_site/tokens/a.css"),
+        ["shared/tokens/a.css"]
+    );
+    assert_eq!(
+        sources_of(&manifest, "_site/tokens/fonts/x.woff2"),
+        ["shared/tokens/fonts/x.woff2"]
+    );
+}
+
+#[test]
+fn a_publish_entry_that_matches_nothing_is_an_error() {
+    expect_error(
+        "publish-empty",
+        |dir| {
+            append_config(
+                dir,
+                "[[publish]]\nfrom = \"shared/tokens\"\nto = \"tokens\"\nfiles = [\"*.css\"]",
+            );
+            write(dir, "shared/tokens/b.txt", "x\n");
+        },
+        "matches no file",
+    );
+    expect_error(
+        "publish-missing",
+        |dir| append_config(dir, "[[publish]]\nfrom = \"shared/none\"\nto = \"x\""),
+        "is not a directory",
+    );
+}

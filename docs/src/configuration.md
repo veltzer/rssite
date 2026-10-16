@@ -16,6 +16,11 @@ static_dir = "static"
 sass_dir = "sass"
 i18n_dir = "i18n"
 
+# A theme: themes/<name>/ holds templates, sass, static and i18n
+# directories behind the site's own. Optional.
+# theme = "fleet"
+themes_dir = "themes"
+
 # The language used for the root redirect and the global 404.html.
 # Defaults to the first language. It is a fallback for hosts that cannot
 # negotiate, not a "default language": every language is written and
@@ -62,7 +67,28 @@ enabled = true
 
 [extra]
 # Anything; templates read it as config.extra.
+
+# Directories published into the output as they are. Optional, repeatable.
+[[publish]]
+from = "shared/shared-themes"      # relative to the site root
+to = "shared-themes"               # relative to the output root
+files = ["themes.css", "fonts.css", "theme-switcher.js", "fonts/*"]
 ```
+
+## Themes
+
+A theme is a directory, `themes/<name>/`, with the same four directories a site has: `templates`, `sass`, `static` and `i18n`. With `theme = "<name>"` set, the site's own directories sit in front of the theme's, file by file:
+
+- A template is looked up in `templates/` first, then in the theme's `templates/`. A name that exists in both is the site's. The manifest lists the file that was used, `templates/base.html` or `themes/fleet/templates/base.html`, so an override is visible, never silent.
+- A sass file is compiled from whichever root has it; a partial (`_tokens.scss`) is found by `@use` in the site's `sass/` first, then the theme's, so the site can use a theme's partials and override them.
+- A static file is published from the site's `static/` if present there, otherwise from the theme's.
+- A translation file is layered: the theme's `i18n/<code>.toml` first, then the site's, key by key, so the site overrides single strings. A theme file for a language the site does not declare is an error.
+
+A theme named in the configuration that does not exist is an error. A theme never changes which languages a site has, which taxonomies, or where the output goes; those stay in `rssite.toml`.
+
+## Published directories
+
+Some of what a site serves is not its own: a submodule's stylesheets, a shared font directory. A `[[publish]]` entry copies files from a directory under the site root into a directory under the output root, as they are. `files` is a list of globs relative to `from` (`*` within a segment, `**` across segments, `?` one character); the default is everything. Each copied file is its own output in the manifest, with itself as its only source, so a build system rebuilds exactly the changed file. An entry whose `from` is not a directory, or that matches no file, is an error: the usual cause is a submodule that is not checked out.
 
 ## Languages
 

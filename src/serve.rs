@@ -64,7 +64,7 @@ fn build(root: &Path, drafts: bool) {
 }
 
 fn watched_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
-    [
+    let mut dirs: Vec<PathBuf> = [
         &config.content_dir,
         &config.templates_dir,
         &config.static_dir,
@@ -73,7 +73,15 @@ fn watched_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
     ]
     .iter()
     .map(|d| root.join(d))
-    .collect()
+    .collect();
+    // The theme and the published directories change the output too.
+    if let Some(theme) = &config.theme {
+        dirs.push(root.join(&config.themes_dir).join(theme));
+    }
+    for entry in &config.publish {
+        dirs.push(root.join(&entry.from));
+    }
+    dirs
 }
 
 fn fingerprint(dirs: &[PathBuf], config_file: &Path) -> Vec<(PathBuf, Option<SystemTime>, u64)> {

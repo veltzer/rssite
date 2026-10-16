@@ -18,6 +18,8 @@ Templates are [Tera](https://keats.github.io/tera/docs/) files under `templates/
 
 A missing `index.html`, `section.html`, `page.html`, `taxonomy_list.html` or `taxonomy_single.html` is an error when something needs it.
 
+With a theme configured (see [Configuration](configuration.md)), every name is looked up in the site's `templates/` first and in the theme's second; `extends`, `include` and `import` resolve the same way, so a site template can extend a theme layout and a theme layout can include a site partial. The manifest names the file each template came from.
+
 ## Context
 
 Every template gets:

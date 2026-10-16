@@ -95,3 +95,50 @@ pub fn escape_html(text: &str) -> String {
     }
     out
 }
+
+/// Whether `rel`, a `/`-separated path, matches the glob `pattern`: `*`
+/// matches within one path segment, `**` any number of segments, `?` one
+/// character. `fonts/*` matches `fonts/a.woff2` but not `fonts/x/a.woff2`;
+/// `**/*.css` matches a `.css` file at any depth.
+pub fn glob_match(pattern: &str, rel: &str) -> Result<bool> {
+    let mut re = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                if chars.peek() == Some(&'/') {
+                    chars.next();
+                    re.push_str("(?:.*/)?");
+                } else {
+                    re.push_str(".*");
+                }
+            }
+            '*' => re.push_str("[^/]*"),
+            '?' => re.push_str("[^/]"),
+            other => re.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    re.push('$');
+    let re = regex::Regex::new(&re).with_context(|| format!("glob {pattern:?}"))?;
+    Ok(re.is_match(rel))
+}
+
+#[cfg(test)]
+mod glob_tests {
+    use super::glob_match;
+
+    #[test]
+    fn globs_match_segments_as_documented() {
+        assert!(glob_match("fonts/*", "fonts/a.woff2").unwrap());
+        assert!(!glob_match("fonts/*", "fonts/x/a.woff2").unwrap());
+        assert!(glob_match("**/*.css", "a.css").unwrap());
+        assert!(glob_match("**/*.css", "x/y/a.css").unwrap());
+        assert!(!glob_match("*.css", "x/a.css").unwrap());
+        assert!(glob_match("**/*", "x/y/z").unwrap());
+        assert!(glob_match("a?c", "abc").unwrap());
+        assert!(!glob_match("a?c", "a/c").unwrap());
+        assert!(glob_match("themes.css", "themes.css").unwrap());
+        assert!(!glob_match("themes.css", "themes-css").unwrap());
+    }
+}

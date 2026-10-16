@@ -104,9 +104,7 @@ impl Plan {
         let common = |lang: &str| -> BTreeSet<String> {
             let mut set = BTreeSet::new();
             set.insert(config_file.clone());
-            if let Some(i18n) = site.i18n_source(lang) {
-                set.insert(i18n);
-            }
+            set.extend(site.i18n_sources(lang));
             set
         };
         let with_template =
@@ -330,11 +328,7 @@ impl Plan {
                 kind: Kind::Sitemap,
             });
         }
-        let static_dir = site.root.join(&site.config.static_dir);
-        let has_static_robots = site
-            .static_files
-            .iter()
-            .any(|p| crate::util::rel(p, &static_dir) == "robots.txt");
+        let has_static_robots = site.static_files.iter().any(|f| f.rel == "robots.txt");
         if !has_static_robots {
             let mut sources = BTreeSet::new();
             sources.insert(config_file.clone());
@@ -368,20 +362,31 @@ impl Plan {
             });
         }
 
-        // Static files, Sass, content assets.
-        for path in &site.static_files {
+        // Static files (the site's and the theme's), published directories,
+        // Sass, content assets.
+        for file in &site.static_files {
             let mut sources = BTreeSet::new();
-            sources.insert(site.rel(path));
+            sources.insert(site.rel(&file.path));
             outputs.push(Output {
-                path: crate::util::rel(path, &static_dir),
+                path: file.rel.clone(),
                 sources,
-                kind: Kind::Static(path.clone()),
+                kind: Kind::Static(file.path.clone()),
             });
         }
-        let sass_dir = site.root.join(&site.config.sass_dir);
-        let sass_sources: BTreeSet<String> = site.sass_files.iter().map(|p| site.rel(p)).collect();
-        for path in &site.sass_files {
-            let rel = crate::util::rel(path, &sass_dir);
+        for file in &site.published {
+            let mut sources = BTreeSet::new();
+            sources.insert(file.source.clone());
+            outputs.push(Output {
+                path: file.out.clone(),
+                sources,
+                kind: Kind::Static(file.path.clone()),
+            });
+        }
+        let sass_sources: BTreeSet<String> =
+            site.sass_files.iter().map(|f| site.rel(&f.path)).collect();
+        for file in &site.sass_files {
+            let rel = file.rel.clone();
+            let path = &file.path;
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
