@@ -367,4 +367,324 @@ mod tests {
         let out = render("## שלום עולם\n", &opts(), &no_links).unwrap();
         assert!(out.html.contains("id=\"שלום-עולם\""));
     }
+
+    #[test]
+    fn ascii_anchors_transliterate_headings() {
+        let ascii = RenderOptions {
+            anchor_mode: SlugMode::Ascii,
+            ..opts()
+        };
+        let out = render("## Café au lait\n", &ascii, &no_links).unwrap();
+        assert!(out.html.contains("id=\"cafe-au-lait\""), "{}", out.html);
+    }
+
+    #[test]
+    fn an_explicit_heading_id_wins_and_still_counts_for_duplicates() {
+        let out = render(
+            "## Intro {#start}\n\n## start\n\n## Other {#start}\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert!(
+            out.html.contains("<h2 id=\"start\">Intro</h2>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<h2 id=\"start-1\">start</h2>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<h2 id=\"start-2\">Other</h2>"),
+            "{}",
+            out.html
+        );
+        assert_eq!(out.toc.len(), 3);
+        assert_eq!(out.toc[0].id, "start");
+        assert_eq!(out.toc[0].title, "Intro");
+    }
+
+    #[test]
+    fn a_heading_without_letters_gets_a_numbered_id() {
+        let out = render("## !!!\n\n## ???\n\n## ...\n", &opts(), &no_links).unwrap();
+        assert!(out.html.contains("id=\"section-1\""), "{}", out.html);
+        assert!(out.html.contains("id=\"section-2\""), "{}", out.html);
+        assert!(out.html.contains("id=\"section-3\""), "{}", out.html);
+    }
+
+    #[test]
+    fn heading_text_includes_code_spans_and_emphasis() {
+        let out = render("## Using `cargo build` *now*\n", &opts(), &no_links).unwrap();
+        assert!(
+            out.html.contains("id=\"using-cargo-build-now\""),
+            "{}",
+            out.html
+        );
+        assert_eq!(out.toc[0].title, "Using cargo build now");
+    }
+
+    #[test]
+    fn the_toc_nests_by_level_and_recovers_from_skips() {
+        let out = render(
+            "# A\n\n### A.x\n\n## A.1\n\n### A.1.a\n\n#### A.1.a.i\n\n## A.2\n\n# B\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert_eq!(out.toc.len(), 2);
+        let a = &out.toc[0];
+        assert_eq!(a.title, "A");
+        assert_eq!(a.level, 1);
+        let titles: Vec<&str> = a.children.iter().map(|h| h.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["A.x", "A.1", "A.2"],
+            "a skipped level nests under the last ancestor"
+        );
+        assert_eq!(a.children[1].children.len(), 1);
+        assert_eq!(a.children[1].children[0].children[0].title, "A.1.a.i");
+        assert_eq!(out.toc[1].title, "B");
+        assert!(out.toc[1].children.is_empty());
+    }
+
+    #[test]
+    fn a_body_without_headings_has_an_empty_toc_and_no_summary() {
+        let out = render("just text\n", &opts(), &no_links).unwrap();
+        assert!(out.toc.is_empty());
+        assert!(out.summary.is_none());
+        assert_eq!(out.word_count, 2);
+        assert!(out.links.is_empty());
+    }
+
+    #[test]
+    fn the_summary_is_the_html_before_the_marker() {
+        let out = render(
+            "# Title\n\nfirst *para*\n\nsecond\n\n<!-- more -->\n\nrest\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        let summary = out.summary.unwrap();
+        assert!(summary.starts_with("<h1 id=\"title\">Title</h1>"));
+        assert!(summary.ends_with("<p>second</p>"), "{summary}");
+        assert!(!summary.contains("rest"));
+        assert!(out.html.contains("<p>rest</p>"));
+        // Only the first marker counts.
+        let twice = render(
+            "a\n\n<!-- more -->\n\nb\n\n<!-- more -->\n\nc\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert_eq!(twice.summary.as_deref(), Some("<p>a</p>"));
+    }
+
+    #[test]
+    fn commonmark_extensions_are_on() {
+        let out = render(
+            "| a | b |\n|---|---|\n| 1 | 2 |\n\n~~gone~~\n\n- [x] done\n- [ ] todo\n\nnote[^1]\n\n[^1]: the note\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert!(out.html.contains("<table>"), "{}", out.html);
+        assert!(out.html.contains("<del>gone</del>"), "{}", out.html);
+        assert!(out.html.contains("type=\"checkbox\""), "{}", out.html);
+        assert!(out.html.contains("checked"), "{}", out.html);
+        assert!(out.html.contains("footnote"), "{}", out.html);
+    }
+
+    #[test]
+    fn smart_punctuation_is_opt_in() {
+        let text = "\"quoted\" -- and...\n";
+        let plain = render(text, &opts(), &no_links).unwrap();
+        assert!(
+            plain.html.contains("\"quoted\" -- and..."),
+            "{}",
+            plain.html
+        );
+        let smart = RenderOptions {
+            smart_punctuation: true,
+            ..opts()
+        };
+        let curly = render(text, &smart, &no_links).unwrap();
+        assert!(curly.html.contains("“quoted” – and…"), "{}", curly.html);
+    }
+
+    #[test]
+    fn raw_html_passes_through() {
+        let out = render(
+            "<div class=\"x\"><b>bold</b></div>\n\n<span>*not em*</span>\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert!(out.html.contains("<div class=\"x\"><b>bold</b></div>"));
+        // Inline HTML in a paragraph is still markdown-processed around it.
+        assert!(
+            out.html.contains("<span><em>not em</em></span>"),
+            "{}",
+            out.html
+        );
+    }
+
+    #[test]
+    fn images_and_links_both_resolve_content_paths() {
+        let resolve = |path: &str| match path {
+            "blog/a.md" => Some("https://x/en/blog/a/".to_owned()),
+            "blog/pic.png" => Some("https://x/en/blog/pic.png".to_owned()),
+            _ => None,
+        };
+        let out = render(
+            "![alt](@/blog/pic.png) [a](@/blog/a.md) [again](@/blog/a.md) [rel](other/) [abs](/x/) [mail](mailto:a@b)",
+            &opts(),
+            &resolve,
+        )
+        .unwrap();
+        assert!(
+            out.html
+                .contains("<img src=\"https://x/en/blog/pic.png\" alt=\"alt\""),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains("href=\"https://x/en/blog/a/\""));
+        assert!(out.html.contains("href=\"other/\""));
+        assert!(out.html.contains("href=\"/x/\""));
+        assert!(out.html.contains("href=\"mailto:a@b\""));
+        assert_eq!(
+            out.links,
+            vec!["blog/a.md".to_owned(), "blog/pic.png".to_owned()],
+            "sorted, deduplicated"
+        );
+        let broken = render("![x](@/blog/missing.png)", &opts(), &resolve).unwrap_err();
+        assert!(
+            broken
+                .to_string()
+                .contains("no content file matches \"blog/missing.png\"")
+        );
+    }
+
+    #[test]
+    fn a_fragment_on_a_content_link_is_kept() {
+        let resolve = |path: &str| (path == "a.md").then(|| "https://x/en/a/".to_owned());
+        let out = render("[a](@/a.md#sec-2)", &opts(), &resolve).unwrap();
+        assert!(out.html.contains("href=\"https://x/en/a/#sec-2\""));
+        assert_eq!(out.links, vec!["a.md".to_owned()]);
+    }
+
+    #[test]
+    fn code_blocks_count_their_words_and_keep_the_language_class() {
+        let out = render(
+            "```python\nprint('hi there')\n```\n\n    indented\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert!(
+            out.html.contains(
+                "<pre><code class=\"language-python\">print(&#39;hi there&#39;)\n</code></pre>"
+            ),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<pre><code>indented\n</code></pre>"),
+            "{}",
+            out.html
+        );
+        assert_eq!(out.word_count, 3);
+    }
+
+    #[test]
+    fn fenced_info_strings_take_only_the_language_token() {
+        let highlighted = RenderOptions {
+            highlight: true,
+            ..opts()
+        };
+        let out = render("```rust,ignore\nlet x = 1;\n```\n", &highlighted, &no_links).unwrap();
+        assert!(out.html.contains("class=\"language-rust\""), "{}", out.html);
+        let out = render("```sh title=x\necho hi\n```\n", &highlighted, &no_links).unwrap();
+        assert!(out.html.contains("class=\"language-sh\""), "{}", out.html);
+    }
+
+    #[test]
+    fn an_unknown_language_is_escaped_plain_code_even_when_highlighting() {
+        let highlighted = RenderOptions {
+            highlight: true,
+            ..opts()
+        };
+        let out = render("```nosuchlang\na < b\n```\n", &highlighted, &no_links).unwrap();
+        assert!(
+            out.html
+                .contains("<pre><code class=\"language-nosuchlang\">a &lt; b\n</code></pre>"),
+            "{}",
+            out.html
+        );
+        let out = render("```\"><script>\nx\n```\n", &highlighted, &no_links).unwrap();
+        assert!(
+            !out.html.contains("<script>"),
+            "the class is escaped:\n{}",
+            out.html
+        );
+    }
+
+    #[test]
+    fn highlighted_code_is_wrapped_in_spans_with_classes() {
+        let highlighted = RenderOptions {
+            highlight: true,
+            ..opts()
+        };
+        let out = render(
+            "```rust\nfn main() { let s = \"<x>\"; }\n```\n",
+            &highlighted,
+            &no_links,
+        )
+        .unwrap();
+        assert!(
+            out.html
+                .starts_with("<pre class=\"highlight\"><code class=\"language-rust\">")
+        );
+        assert!(out.html.contains("<span class=\""), "{}", out.html);
+        assert!(
+            out.html.contains("&lt;x&gt;"),
+            "code is escaped:\n{}",
+            out.html
+        );
+        assert!(!out.html.contains("style=\""), "classes, not inline styles");
+    }
+
+    #[test]
+    fn highlight_css_knows_its_themes() {
+        let css = highlight_css("InspiredGitHub").unwrap();
+        assert!(css.contains(".keyword"), "{css}");
+        let error = highlight_css("nope").unwrap_err().to_string();
+        assert!(error.contains("\"nope\" is not a known theme"), "{error}");
+        assert!(
+            error.contains("InspiredGitHub"),
+            "the known names are listed:\n{error}"
+        );
+        assert!(error.contains("base16-ocean.dark"), "{error}");
+    }
+
+    #[test]
+    fn word_count_covers_text_code_spans_and_blocks() {
+        let out = render(
+            "one two `three four` **five**\n\n```\nsix seven\n```\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert_eq!(out.word_count, 7);
+    }
+
+    #[test]
+    fn heading_structs_serialize_for_templates() {
+        let out = render("# T\n\n## U\n", &opts(), &no_links).unwrap();
+        let json = serde_json::to_value(&out.toc).unwrap();
+        assert_eq!(json[0]["id"], "t");
+        assert_eq!(json[0]["level"], 1);
+        assert_eq!(json[0]["children"][0]["title"], "U");
+    }
 }

@@ -38,10 +38,19 @@ pub fn rel(path: &Path, base: &Path) -> String {
 
 /// A path as a `/`-separated string.
 pub fn unix(path: &Path) -> String {
-    path.components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut out = String::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::RootDir => out.push('/'),
+            other => {
+                if !out.is_empty() && !out.ends_with('/') {
+                    out.push('/');
+                }
+                out.push_str(&other.as_os_str().to_string_lossy());
+            }
+        }
+    }
+    out
 }
 
 /// Write `bytes` to `path` unless the file already holds exactly them.
@@ -157,5 +166,189 @@ mod glob_tests {
         assert!(!glob_match("a?c", "a/c").unwrap());
         assert!(glob_match("themes.css", "themes.css").unwrap());
         assert!(!glob_match("themes.css", "themes-css").unwrap());
+    }
+
+    #[test]
+    fn a_pattern_matches_the_whole_path() {
+        assert!(!glob_match("a", "ab").unwrap());
+        assert!(!glob_match("b", "ab").unwrap());
+        assert!(!glob_match("*.css", "a.css.map").unwrap());
+        assert!(!glob_match("fonts/*", "fonts").unwrap());
+        assert!(!glob_match("fonts/*", "xfonts/a").unwrap());
+    }
+
+    #[test]
+    fn regex_metacharacters_are_literal() {
+        assert!(glob_match("a.b", "a.b").unwrap());
+        assert!(!glob_match("a.b", "axb").unwrap());
+        assert!(glob_match("c++/(x).js", "c++/(x).js").unwrap());
+        assert!(!glob_match("c++/(x).js", "c/x.js").unwrap());
+        assert!(glob_match("[a]", "[a]").unwrap());
+        assert!(!glob_match("[a]", "a").unwrap());
+        assert!(glob_match("$x^", "$x^").unwrap());
+    }
+
+    #[test]
+    fn double_star_in_the_middle_and_at_the_end() {
+        assert!(glob_match("a/**/z", "a/z").unwrap());
+        assert!(glob_match("a/**/z", "a/b/z").unwrap());
+        assert!(glob_match("a/**/z", "a/b/c/z").unwrap());
+        assert!(!glob_match("a/**/z", "a/b/zz").unwrap());
+        assert!(glob_match("a/**", "a/").unwrap());
+        assert!(glob_match("a/**", "a/b/c").unwrap());
+        assert!(glob_match("**", "anything/at/all").unwrap());
+        assert!(glob_match("x**y", "xabc/defy").unwrap());
+    }
+
+    #[test]
+    fn star_and_question_mark_never_cross_a_slash() {
+        assert!(glob_match("*", "file").unwrap());
+        assert!(!glob_match("*", "dir/file").unwrap());
+        assert!(glob_match("*/*", "dir/file").unwrap());
+        assert!(!glob_match("*/*", "a/b/c").unwrap());
+        assert!(glob_match("?", "a").unwrap());
+        assert!(!glob_match("?", "/").unwrap());
+        assert!(glob_match("a*", "a").unwrap(), "star matches nothing too");
+        assert!(glob_match("ש*.md", "שלום.md").unwrap(), "unicode is fine");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rssite-util-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn html_escaping_covers_the_five_characters_and_nothing_else() {
+        assert_eq!(
+            escape_html("<a href=\"x\">Tom & Jerry's</a>"),
+            "&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;"
+        );
+        assert_eq!(
+            escape_html("/en/blog/"),
+            "/en/blog/",
+            "slashes are not escaped"
+        );
+        assert_eq!(escape_html("שלום – «ok»"), "שלום – «ok»");
+        assert_eq!(escape_html(""), "");
+        assert_eq!(
+            escape_html("&amp;"),
+            "&amp;amp;",
+            "no double-escape detection"
+        );
+    }
+
+    #[test]
+    fn toml_values_become_their_json_counterparts() {
+        let table: toml::Table = toml::from_str(
+            "s = \"x\"\ni = 3\nf = 1.5\nb = true\nd = 2026-04-28\ndt = 2026-04-28T10:00:00+02:00\na = [1, \"two\"]\n[t]\nk = \"v\"\n",
+        )
+        .unwrap();
+        let json = toml_to_json(&toml::Value::Table(table));
+        assert_eq!(json["s"], "x");
+        assert_eq!(json["i"], 3);
+        assert_eq!(json["f"], 1.5);
+        assert_eq!(json["b"], true);
+        assert_eq!(json["d"], "2026-04-28");
+        assert_eq!(json["dt"], "2026-04-28T10:00:00+02:00");
+        assert_eq!(json["a"][0], 1);
+        assert_eq!(json["a"][1], "two");
+        assert_eq!(json["t"]["k"], "v");
+        assert!(json["missing"].is_null());
+    }
+
+    #[test]
+    fn toml_key_order_is_kept() {
+        let table: toml::Table = toml::from_str("z = 1\na = 2\nm = 3\n").unwrap();
+        let json = toml_to_json(&toml::Value::Table(table));
+        let keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        // toml::Table is a BTreeMap: sorted, and the JSON keeps that order.
+        assert_eq!(keys, ["a", "m", "z"]);
+    }
+
+    #[test]
+    fn paths_are_slash_separated_and_relative_to_a_base() {
+        let base = Path::new("/srv/site");
+        assert_eq!(
+            rel(Path::new("/srv/site/content/a.md"), base),
+            "content/a.md"
+        );
+        assert_eq!(rel(Path::new("/srv/site"), base), "");
+        assert_eq!(
+            rel(Path::new("/elsewhere/x"), base),
+            "/elsewhere/x",
+            "a path outside the base is returned whole"
+        );
+        assert_eq!(unix(Path::new("a/b/c.txt")), "a/b/c.txt");
+        assert_eq!(unix(Path::new("/a/b")), "/a/b");
+        assert_eq!(unix(Path::new("")), "");
+    }
+
+    #[test]
+    fn write_if_changed_writes_once_and_creates_parents() {
+        let dir = temp("write");
+        let path = dir.join("deep/er/file.txt");
+        assert!(write_if_changed(&path, b"one").unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"one");
+        assert!(
+            !write_if_changed(&path, b"one").unwrap(),
+            "same bytes: untouched"
+        );
+        assert!(write_if_changed(&path, b"two").unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
+        assert!(
+            write_if_changed(&path, b"").unwrap(),
+            "emptying is a change"
+        );
+        assert!(!write_if_changed(&path, b"").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn write_if_changed_keeps_the_mtime_of_an_unchanged_file() {
+        let dir = temp("mtime");
+        let path = dir.join("f");
+        write_if_changed(&path, b"x").unwrap();
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_if_changed(&path, b"x").unwrap();
+        let after = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(before, after);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn walk_files_is_sorted_and_tolerates_a_missing_directory() {
+        let dir = temp("walk");
+        assert!(walk_files(&dir.join("nope")).unwrap().is_empty());
+        for name in ["b.txt", "a/z.txt", "a/b/c.txt", "a.txt"] {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, name).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("empty")).unwrap();
+        let found: Vec<String> = walk_files(&dir)
+            .unwrap()
+            .iter()
+            .map(|p| rel(p, &dir))
+            .collect();
+        // PathBuf order: component by component, so `a/` sorts before `a.txt`.
+        assert_eq!(found, ["a/b/c.txt", "a/z.txt", "a.txt", "b.txt"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn read_names_the_missing_file() {
+        let error = format!(
+            "{:#}",
+            read(Path::new("/nonexistent/rssite/file")).unwrap_err()
+        );
+        assert!(error.contains("/nonexistent/rssite/file"), "{error}");
     }
 }

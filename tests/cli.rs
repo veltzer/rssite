@@ -3,90 +3,10 @@
 //! deterministic, and every silent failure of the previous generator is a
 //! loud error here.
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use common::*;
 use std::process::Command;
-
-fn binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rssite"))
-}
-
-fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bilingual")
-}
-
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("rssite-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn copy_dir(from: &Path, to: &Path) {
-    for entry in std::fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            std::fs::create_dir_all(&target).unwrap();
-            copy_dir(&entry.path(), &target);
-        } else {
-            std::fs::copy(entry.path(), target).unwrap();
-        }
-    }
-}
-
-struct Run {
-    ok: bool,
-    stdout: String,
-    stderr: String,
-}
-
-fn run(dir: &Path, args: &[&str]) -> Run {
-    let output = Command::new(binary())
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Run {
-        ok: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    }
-}
-
-fn read(dir: &Path, rel: &str) -> String {
-    std::fs::read_to_string(dir.join(rel)).unwrap_or_else(|e| panic!("reading {rel}: {e}"))
-}
-
-fn files_under(dir: &Path) -> Vec<String> {
-    let mut out = Vec::new();
-    if !dir.is_dir() {
-        return out;
-    }
-    for entry in walk(dir) {
-        out.push(
-            entry
-                .strip_prefix(dir)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/"),
-        );
-    }
-    out.sort();
-    out
-}
-
-fn walk(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            out.extend(walk(&path));
-        } else {
-            out.push(path);
-        }
-    }
-    out
-}
 
 #[test]
 fn bare_invocation_lists_the_commands() {
@@ -356,19 +276,6 @@ fn drafts_are_excluded_unless_asked() {
     assert!(dir.join("_site/en/blog/draft/index.html").is_file());
 }
 
-fn expect_error(name: &str, mutate: impl FnOnce(&Path), needle: &str) {
-    let dir = temp_dir(name);
-    copy_dir(&fixture(), &dir);
-    mutate(&dir);
-    let build = run(&dir, &["check"]);
-    assert!(!build.ok, "expected {name} to fail");
-    assert!(
-        build.stderr.contains(needle),
-        "expected {needle:?} in:\n{}",
-        build.stderr
-    );
-}
-
 #[test]
 fn unsuffixed_content_file_is_an_error() {
     expect_error(
@@ -521,40 +428,6 @@ fn unknown_static_url_is_an_error() {
 }
 
 // ── themes and published directories ──────────────────────────────────────
-
-/// Top-level keys must precede every table in TOML, so a key goes first.
-fn prepend_config(dir: &Path, text: &str) {
-    let path = dir.join("rssite.toml");
-    let old = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, format!("{text}\n{old}")).unwrap();
-}
-
-/// A table goes last; a new header closes whatever table came before.
-fn append_config(dir: &Path, text: &str) {
-    let path = dir.join("rssite.toml");
-    let old = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, format!("{old}\n{text}\n")).unwrap();
-}
-
-fn write(dir: &Path, rel: &str, text: &str) {
-    let path = dir.join(rel);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
-fn sources_of(manifest: &serde_json::Value, path: &str) -> Vec<String> {
-    manifest["outputs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|o| o["path"] == path)
-        .unwrap_or_else(|| panic!("no output {path} in the manifest"))["sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| s.as_str().unwrap().to_owned())
-        .collect()
-}
 
 #[test]
 fn theme_directory_sits_behind_the_site() {

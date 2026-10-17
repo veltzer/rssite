@@ -69,7 +69,7 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 
 - `date(format="%-d %B %Y", lang=?)`: formats a date or RFC 3339 string with strftime, taking `%B`, `%b`, `%A` and `%a` from the language's `[dates]` names. An invalid format is an error.
 - `slugify(mode="safe")`: the site's slugifier.
-- `markdown(inline=false)`: render a string as markdown.
+- `markdown(inline=false)`: render a string as markdown. `inline=true` unwraps a single paragraph; a string that renders to anything else (several paragraphs, a heading) is returned as it is.
 
 All of Tera's own filters (`length`, `sort`, `group_by`, `concat`, `slice`, `json_encode`, `get`, `default` and the rest) are available; Tera's macros work through `{% import "macros.html" as m %}`.
 

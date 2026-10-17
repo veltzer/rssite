@@ -194,6 +194,9 @@ pub struct Site {
     /// `(lang, path below content without language suffix)` to page index.
     pub page_lookup: BTreeMap<(String, String), usize>,
     pub section_lookup: BTreeMap<(String, String), usize>,
+    /// `(directory components, language)` of every section index dropped
+    /// as a draft: its pages and assets go with it.
+    pub drafted_sections: BTreeSet<(Vec<String>, String)>,
 }
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
@@ -274,6 +277,7 @@ impl Site {
             content_files: Vec::new(),
             page_lookup: BTreeMap::new(),
             section_lookup: BTreeMap::new(),
+            drafted_sections: BTreeSet::new(),
         };
         site.content_files = files
             .iter()
@@ -479,7 +483,17 @@ impl Site {
                 }
             }
         }
+        self.drafted_sections = drafted;
         Ok(())
+    }
+
+    /// Whether a content file in `components` is under a section index of
+    /// `lang` that was dropped as a draft, at that directory or above.
+    pub fn under_drafted_section(&self, components: &[String], lang: &str) -> bool {
+        (0..=components.len()).any(|n| {
+            self.drafted_sections
+                .contains(&(components[..n].to_vec(), lang.to_owned()))
+        })
     }
 
     fn section_path(&self, lang: &str, components: &[String]) -> Result<String> {
@@ -1169,5 +1183,105 @@ mod tests {
         assert!(!reads_other_pages(
             "{{ page.title }} {{ page.content | safe }}"
         ));
+    }
+
+    #[test]
+    fn every_cross_page_construct_is_detected() {
+        for text in [
+            "{{ get_page(path=\"a.md\") }}",
+            "{{ get_taxonomy(name=\"tags\") }}",
+            "{{ get_taxonomy_url(name=\"tags\", term=\"x\") }}",
+            "{% for s in section.subsections %}",
+            "{% if page.previous %}",
+            "{{ page.next.title }}",
+            "{{ term.pages | length }}",
+        ] {
+            assert!(reads_other_pages(text), "{text}");
+        }
+        for text in [
+            "{{ page.pages_note }}",
+            "{{ pagesize }}",
+            "{{ previous_label }}",
+            "{{ trans(key=\"next\") }}",
+            "",
+        ] {
+            assert!(!reads_other_pages(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn load_data_paths_are_the_literal_ones() {
+        let found = load_data_paths(
+            "{{ load_data(path=\"out/build_info.toml\") }} {% set x = load_data( path = \"data/a.json\", required=false) %} {{ load_data(path=dynamic) }}",
+        );
+        assert_eq!(found, vec!["out/build_info.toml", "data/a.json"]);
+        assert!(load_data_paths("{{ page.title }}").is_empty());
+    }
+
+    #[test]
+    fn template_references_tolerate_whitespace_control_and_imports() {
+        let refs = template_references(
+            "{%- extends \"base.html\" -%}\n{%include \"a.html\"%}\n{%   import   \"m.html\" as m %}\n{% include 'single.html' %}",
+        );
+        assert_eq!(
+            refs,
+            vec!["base.html", "a.html", "m.html"],
+            "single quotes are not tracked"
+        );
+    }
+
+    fn templates(files: &[(&str, &str)]) -> Templates {
+        Templates {
+            files: files
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            origins: files
+                .iter()
+                .map(|(k, _)| ((*k).to_owned(), format!("templates/{k}")))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_closure_follows_references_and_survives_cycles() {
+        let t = templates(&[
+            (
+                "page.html",
+                "{% extends \"base.html\" %}{% include \"_x.html\" %}",
+            ),
+            (
+                "base.html",
+                "{% include \"_nav.html\" %}{% include \"missing.html\" %}",
+            ),
+            ("_nav.html", "{% include \"base.html\" %}"),
+            ("_x.html", "x"),
+            ("other.html", "unrelated"),
+        ]);
+        let closure = t.closure("page.html");
+        let mut names: Vec<&str> = closure.iter().map(String::as_str).collect();
+        names.sort();
+        assert_eq!(names, ["_nav.html", "_x.html", "base.html", "page.html"]);
+        assert!(
+            t.closure("missing.html").is_empty(),
+            "an unknown root has no closure"
+        );
+        assert_eq!(t.closure("_x.html").len(), 1);
+        assert!(t.has("page.html") && !t.has("missing.html"));
+    }
+
+    #[test]
+    fn default_templates_are_default() {
+        let t = Templates::default();
+        assert!(t.files.is_empty());
+        assert!(!t.has("page.html"));
+        assert!(t.closure("page.html").is_empty());
+    }
+
+    #[test]
+    fn strip_lang_takes_the_last_suffix_only() {
+        assert_eq!(strip_lang("en/notes.en.md", "en"), "en/notes.md");
+        assert_eq!(strip_lang("a.en.b.en.md", "en"), "a.en.b.md");
+        assert_eq!(strip_lang("x.he.md", "en"), "x.he.md");
     }
 }

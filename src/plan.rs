@@ -430,6 +430,10 @@ impl Plan {
         }
         for asset in &site.assets {
             for language in &site.config.languages {
+                // A draft section takes its assets with it, like its pages.
+                if site.under_drafted_section(&asset.components, &language.code) {
+                    continue;
+                }
                 let Ok(dir) = site_section_path(site, &language.code, &asset.components) else {
                     continue;
                 };
@@ -559,5 +563,85 @@ mod tests {
         assert_eq!(alias_path("/old"), "old/index.html");
         assert_eq!(alias_path("/keys/public.asc"), "keys/public.asc");
         assert_eq!(alias_path("/"), "index.html");
+    }
+
+    #[test]
+    fn alias_paths_edge_cases() {
+        assert_eq!(alias_path(""), "index.html");
+        assert_eq!(alias_path("///"), "index.html");
+        assert_eq!(
+            alias_path("old"),
+            "old/index.html",
+            "no leading slash needed"
+        );
+        assert_eq!(alias_path("/old.html"), "old.html");
+        assert_eq!(
+            alias_path("/v1.2/"),
+            "v1.2/index.html",
+            "a dot in a directory name is still a directory when the alias ends in /"
+        );
+        assert_eq!(
+            alias_path("/v1.2"),
+            "v1.2",
+            "...and a file when it does not"
+        );
+        assert_eq!(alias_path("/a/b.c/d/"), "a/b.c/d/index.html");
+        assert_eq!(alias_path("/ישן/"), "ישן/index.html");
+    }
+
+    #[test]
+    fn pagers_round_up_and_never_vanish() {
+        assert_eq!(pager_count(1, Some(1)), Some(1));
+        assert_eq!(pager_count(2, Some(1)), Some(2));
+        assert_eq!(pager_count(9, Some(10)), Some(1));
+        assert_eq!(pager_count(20, Some(10)), Some(2));
+        assert_eq!(pager_count(21, Some(10)), Some(3));
+        assert_eq!(pager_count(1000, None), None);
+    }
+
+    #[test]
+    fn strip_root_drops_every_leading_slash() {
+        assert_eq!(strip_root("/en/blog/"), "en/blog/");
+        assert_eq!(strip_root("//x"), "x");
+        assert_eq!(strip_root("/"), "");
+        assert_eq!(strip_root(""), "");
+        assert_eq!(strip_root("en/"), "en/");
+    }
+
+    #[test]
+    fn the_manifest_prefixes_paths_with_the_output_directory() {
+        let plan = Plan {
+            outputs: vec![
+                Output {
+                    path: "en/index.html".into(),
+                    sources: ["content/_index.en.md", "rssite.toml"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    kind: Kind::Root,
+                },
+                Output {
+                    path: "style.css".into(),
+                    sources: BTreeSet::new(),
+                    kind: Kind::Sass(PathBuf::from("/x/sass/style.scss")),
+                },
+            ],
+        };
+        let manifest = plan.manifest("public");
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["outputs"][0]["path"], "public/en/index.html");
+        assert_eq!(
+            manifest["outputs"][0]["sources"],
+            serde_json::json!(["content/_index.en.md", "rssite.toml"])
+        );
+        assert_eq!(manifest["outputs"][1]["path"], "public/style.css");
+        assert_eq!(manifest["outputs"][1]["sources"], serde_json::json!([]));
+        assert_eq!(
+            plan.paths(),
+            ["en/index.html", "style.css"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
     }
 }

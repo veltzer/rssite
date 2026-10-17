@@ -1,0 +1,760 @@
+//! The commands around the build: what the plan says each file depends on,
+//! what `build` writes and leaves alone, what `clean` removes, what `query`
+//! and `version` print, how `init` refuses to clobber, and the exit codes.
+
+mod common;
+
+use common::*;
+use std::process::Command;
+
+// ── the plan's sources ────────────────────────────────────────────────────
+
+#[test]
+fn every_output_names_its_sources() {
+    let dir = site("sources");
+    let plan = plan_of(&dir);
+    let page = sources_of(&plan, "_site/en/blog/first/index.html");
+    for needed in [
+        "content/blog/first.en.md",
+        "content/blog/first.he.md",
+        "content/blog/second.en.md",
+        "content/blog/second.he.md",
+        "content/blog/_index.en.md",
+        "templates/page.html",
+        "templates/base.html",
+        "i18n/en.toml",
+        "rssite.toml",
+    ] {
+        assert!(
+            page.contains(&needed.to_owned()),
+            "{needed} missing from {page:?}"
+        );
+    }
+    assert!(
+        page.contains(&"content/blog/third.en.md".to_owned()),
+        "page.html reads page.previous, so every content file is a source: {page:?}"
+    );
+    assert!(!page.contains(&"i18n/he.toml".to_owned()), "{page:?}");
+    assert!(!page.contains(&"i18n/tags.toml".to_owned()), "{page:?}");
+
+    let alias = sources_of(&plan, "_site/old/third/index.html");
+    assert_eq!(alias, ["content/blog/third.en.md", "rssite.toml"]);
+
+    let listing = sources_of(&plan, "_site/en/blog/index.html");
+    assert!(
+        listing.contains(&"content/about.en.tera".to_owned()),
+        "every English content file: {listing:?}"
+    );
+    assert!(listing.contains(&"templates/section.html".to_owned()));
+    assert!(
+        listing.contains(&"content/blog/first.he.md".to_owned()),
+        "section.html loops over section.pages, which makes it depend on everything: {listing:?}"
+    );
+    assert_eq!(
+        sources_of(&plan, "_site/en/blog/page/2/index.html"),
+        listing,
+        "pagers share the sources"
+    );
+
+    let home = sources_of(&plan, "_site/en/index.html");
+    assert!(home.contains(&"templates/index.html".to_owned()));
+    assert!(
+        home.contains(&"content/blog/third.en.md".to_owned()),
+        "index.html reads the blog section: {home:?}"
+    );
+
+    let feed = sources_of(&plan, "_site/en/atom.xml");
+    assert!(
+        feed.contains(&"content/blog/third.en.md".to_owned())
+            && !feed.contains(&"content/blog/first.he.md".to_owned())
+    );
+    assert!(
+        !feed.iter().any(|s| s.starts_with("templates/")),
+        "the built-in feed template is not a file: {feed:?}"
+    );
+
+    let sitemap = sources_of(&plan, "_site/sitemap.xml");
+    assert!(
+        sitemap.contains(&"content/blog/first.he.md".to_owned())
+            && sitemap.contains(&"rssite.toml".to_owned())
+    );
+
+    assert_eq!(
+        sources_of(&plan, "_site/favicon.svg"),
+        ["static/favicon.svg"]
+    );
+    assert_eq!(
+        sources_of(&plan, "_site/style.css"),
+        ["sass/_vars.scss", "sass/style.scss"]
+    );
+    assert_eq!(sources_of(&plan, "_site/highlight.css"), ["rssite.toml"]);
+    assert_eq!(
+        sources_of(&plan, "_site/en/blog/data.csv"),
+        ["content/blog/data.csv"]
+    );
+
+    let tags = sources_of(&plan, "_site/en/tags/index.html");
+    assert!(
+        tags.contains(&"i18n/tags.toml".to_owned())
+            && tags.contains(&"templates/taxonomy_list.html".to_owned())
+    );
+    let term = sources_of(&plan, "_site/he/tags/דת/index.html");
+    assert!(
+        term.contains(&"templates/taxonomy_single.html".to_owned())
+            && term.contains(&"i18n/he.toml".to_owned())
+            && term.contains(&"content/blog/first.he.md".to_owned())
+    );
+    assert!(
+        sources_of(&plan, "_site/en/tags/religion/atom.xml").contains(&"i18n/tags.toml".to_owned())
+    );
+
+    let not_found = sources_of(&plan, "_site/he/404.html");
+    assert_eq!(
+        not_found,
+        ["i18n/he.toml", "rssite.toml"],
+        "the built-in 404 depends on the language's strings and the config"
+    );
+    assert_eq!(
+        sources_of(&plan, "_site/404.html"),
+        ["i18n/en.toml", "rssite.toml"]
+    );
+    assert_eq!(sources_of(&plan, "_site/robots.txt"), ["rssite.toml"]);
+}
+
+#[test]
+fn body_links_and_body_from_add_sources() {
+    let dir = site("sources-links");
+    let plan = plan_of(&dir);
+    let first = sources_of(&plan, "_site/en/blog/first/index.html");
+    assert!(
+        first.contains(&"content/blog/second.he.md".to_owned()),
+        "a link to the Hebrew version:\n{first:?}"
+    );
+    let he_app = sources_of(&plan, "_site/he/apps/index.html");
+    assert!(
+        he_app.contains(&"content/apps/_index.en.html".to_owned()),
+        "body_from:\n{he_app:?}"
+    );
+    assert!(he_app.contains(&"templates/app.html".to_owned()));
+    let about = sources_of(&plan, "_site/en/about/index.html");
+    assert!(about.contains(&"content/about.en.tera".to_owned()));
+}
+
+#[test]
+fn a_template_that_reads_other_pages_depends_on_every_content_file() {
+    let dir = site("sources-cross");
+    write_probe(&dir, "{{ page.title }}");
+    let plan = plan_of(&dir);
+    let before = sources_of(&plan, "_site/en/blog/third/index.html");
+    assert!(
+        !before.contains(&"content/blog/first.en.md".to_owned()),
+        "an unrelated post is not a source: {before:?}"
+    );
+    assert!(
+        !before.contains(&"content/blog/first.he.md".to_owned()),
+        "{before:?}"
+    );
+    for construct in [
+        "{{ page.previous }}",
+        "{{ page.next.title }}",
+        "{{ section.pages | length }}",
+        "{{ get_page(path=\"blog/first.md\") }}",
+        "{{ get_taxonomy(name=\"tags\") }}",
+        "{{ get_taxonomy_url(name=\"tags\", term=\"linux\") }}",
+    ] {
+        write_probe(&dir, construct);
+        let plan = plan_of(&dir);
+        let after = sources_of(&plan, "_site/en/blog/third/index.html");
+        assert!(
+            after.contains(&"content/blog/first.he.md".to_owned()),
+            "{construct}: {after:?}"
+        );
+        assert!(
+            after.contains(&"content/about.en.tera".to_owned()),
+            "{construct}: {after:?}"
+        );
+    }
+}
+
+#[test]
+fn the_plan_is_sorted_unique_and_prefixed_with_the_output_directory() {
+    let dir = site("plan-shape");
+    prepend_config(&dir, "output_dir = \"public\"");
+    let plan = plan_of(&dir);
+    let paths = planned_paths(&plan);
+    assert!(paths.iter().all(|p| p.starts_with("public/")), "{paths:?}");
+    let mut sorted = paths.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(paths, sorted);
+    for output in plan["outputs"].as_array().unwrap() {
+        let sources = output["sources"].as_array().unwrap();
+        assert!(!sources.is_empty(), "{} has no sources", output["path"]);
+        let texts: Vec<&str> = sources.iter().map(|s| s.as_str().unwrap()).collect();
+        let mut sorted = texts.clone();
+        sorted.sort_unstable();
+        assert_eq!(texts, sorted, "sources are sorted");
+        assert!(
+            texts
+                .iter()
+                .all(|s| !s.starts_with('/') && !s.starts_with("public/")),
+            "sources are site-relative: {texts:?}"
+        );
+    }
+    assert_eq!(
+        plan.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["version", "outputs"]
+    );
+}
+
+#[test]
+fn the_plan_does_not_touch_the_output_directory() {
+    let dir = site("plan-readonly");
+    let plan = run(&dir, &["plan"]);
+    assert!(plan.ok);
+    assert!(!dir.join("_site").exists());
+    let check = run(&dir, &["check"]);
+    assert!(check.ok, "{}", check.stderr);
+    assert!(!dir.join("_site").exists(), "check writes nothing");
+    assert!(
+        check.stderr.contains("checked") && check.stderr.contains("files"),
+        "{}",
+        check.stderr
+    );
+    let query = run(&dir, &["query"]);
+    assert!(query.ok);
+    assert!(!dir.join("_site").exists());
+}
+
+// ── building ──────────────────────────────────────────────────────────────
+
+#[test]
+fn build_reports_counts_and_writes_only_what_changed() {
+    let dir = site("incremental");
+    let first = build_ok(&dir);
+    let total = planned_paths(&plan_of(&dir)).len();
+    assert!(
+        first.stderr.contains(&format!(
+            "built {total} files: {total} written, 0 unchanged"
+        )),
+        "{}",
+        first.stderr
+    );
+    let again = build_ok(&dir);
+    assert!(
+        again.stderr.contains(&format!(
+            "built {total} files: 0 written, {total} unchanged"
+        )),
+        "{}",
+        again.stderr
+    );
+    write(&dir, "static/favicon.svg", "<svg>new</svg>");
+    let one = build_ok(&dir);
+    assert!(one.stderr.contains("1 written"), "{}", one.stderr);
+    assert_eq!(read(&dir, "_site/favicon.svg"), "<svg>new</svg>");
+    write(&dir, "sass/_vars.scss", "$width: 50rem;");
+    let css = build_ok(&dir);
+    assert!(
+        css.stderr.contains("1 written"),
+        "a partial change rewrites the one stylesheet:\n{}",
+        css.stderr
+    );
+    assert!(read(&dir, "_site/style.css").contains("50rem"));
+}
+
+#[test]
+fn an_unchanged_file_keeps_its_mtime() {
+    let dir = site("mtime");
+    build_ok(&dir);
+    let path = dir.join("_site/en/blog/first/index.html");
+    let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    write(
+        &dir,
+        "content/blog/third.en.md",
+        "+++\ntitle = \"Third post\"\ndate = 2026-03-15\n+++\n\nChanged body.\n",
+    );
+    let build = build_ok(&dir);
+    assert!(!build.stderr.contains("0 written"), "{}", build.stderr);
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().modified().unwrap(),
+        before,
+        "first.en.md's page was not rewritten"
+    );
+    let third = dir.join("_site/en/blog/third/index.html");
+    assert!(std::fs::metadata(&third).unwrap().modified().unwrap() > before);
+}
+
+#[test]
+fn a_changed_source_reaches_every_output_that_names_it() {
+    let dir = site("propagation");
+    build_ok(&dir);
+    write(
+        &dir,
+        "content/blog/third.en.md",
+        "+++\ntitle = \"Renamed third\"\ndate = 2026-03-15\naliases = [\"/old/third/\", \"/legacy/third.html\"]\n[taxonomies]\ntags = [\"religion\"]\n+++\n\nEnglish only, with aliases.\n",
+    );
+    build_ok(&dir);
+    for rel in [
+        "_site/en/blog/third/index.html",
+        "_site/en/blog/index.html",
+        "_site/en/blog/2026/index.html",
+        "_site/en/tags/religion/index.html",
+        "_site/en/atom.xml",
+        "_site/en/blog/atom.xml",
+        "_site/en/index.html",
+        "_site/en/blog/second/index.html",
+        "_site/en/blog/renamed/index.html",
+    ] {
+        assert!(read(&dir, rel).contains("Renamed third"), "{rel} is stale");
+    }
+}
+
+#[test]
+fn build_with_plan_prints_the_manifest_and_builds() {
+    let dir = site("build-plan");
+    let build = run(&dir, &["build", "--plan"]);
+    assert!(build.ok, "{}", build.stderr);
+    let manifest: serde_json::Value = serde_json::from_str(&build.stdout).unwrap();
+    assert_eq!(manifest, plan_of(&dir));
+    assert!(dir.join("_site/en/index.html").is_file());
+    let plain = run(&dir, &["build"]);
+    assert_eq!(plain.stdout, "", "without --plan nothing goes to stdout");
+}
+
+#[test]
+fn the_build_and_the_plan_agree_in_every_configuration() {
+    let dir = site("agree");
+    prepend_config(&dir, "theme = \"t\"");
+    write(&dir, "themes/t/static/t.txt", "t");
+    write(&dir, "themes/t/sass/t.scss", ".t{}");
+    append_config(&dir, "[[publish]]\nfrom = \"shared\"\nto = \"s\"");
+    write(&dir, "shared/a/b.css", "x");
+    write(&dir, "static/robots.txt", "custom");
+    write(
+        &dir,
+        "content/blog/old.en.md",
+        "+++\ntitle = \"Old\"\ndate = 2020-01-01\naliases = [\"/o/\"]\n+++\n",
+    );
+    build_ok(&dir);
+    let planned = planned_paths(&plan_of(&dir));
+    let built: Vec<String> = files_under(&dir.join("_site"))
+        .iter()
+        .map(|f| format!("_site/{f}"))
+        .collect();
+    assert_eq!(planned, built);
+}
+
+#[test]
+fn stale_files_in_the_output_directory_are_left_alone_by_build() {
+    let dir = site("stale");
+    write(&dir, "_site/leftover.txt", "from another tool");
+    write(&dir, "_site/en/blog/gone/index.html", "old page");
+    build_ok(&dir);
+    assert_eq!(read(&dir, "_site/leftover.txt"), "from another tool");
+    assert_eq!(read(&dir, "_site/en/blog/gone/index.html"), "old page");
+}
+
+#[test]
+fn the_output_directory_is_configurable_for_every_command() {
+    let dir = site("output-dir");
+    prepend_config(&dir, "output_dir = \"out/www\"");
+    build_ok(&dir);
+    assert!(dir.join("out/www/en/index.html").is_file());
+    assert!(!dir.join("_site").exists());
+    assert!(planned_paths(&plan_of(&dir))[0].starts_with("out/www/"));
+    let clean = run(&dir, &["clean"]);
+    assert!(clean.ok);
+    assert!(files_under(&dir.join("out/www")).is_empty());
+    assert!(
+        dir.join("out/www").is_dir(),
+        "the output directory itself stays"
+    );
+}
+
+#[test]
+fn the_content_and_other_directories_are_configurable() {
+    let dir = site("dirs");
+    for (from, to) in [
+        ("content", "src/pages"),
+        ("templates", "src/layouts"),
+        ("static", "src/files"),
+        ("sass", "src/styles"),
+        ("i18n", "src/strings"),
+    ] {
+        std::fs::create_dir_all(dir.join(to).parent().unwrap()).unwrap();
+        std::fs::rename(dir.join(from), dir.join(to)).unwrap();
+    }
+    prepend_config(
+        &dir,
+        "content_dir = \"src/pages\"\ntemplates_dir = \"src/layouts\"\nstatic_dir = \"src/files\"\nsass_dir = \"src/styles\"\ni18n_dir = \"src/strings\"",
+    );
+    edit_config(
+        &dir,
+        "translations = \"i18n/tags.toml\"",
+        "translations = \"src/strings/tags.toml\"",
+    );
+    build_ok(&dir);
+    assert!(dir.join("_site/en/blog/first/index.html").is_file());
+    assert!(dir.join("_site/style.css").is_file());
+    assert!(dir.join("_site/favicon.svg").is_file());
+    let plan = plan_of(&dir);
+    let first = sources_of(&plan, "_site/en/blog/first/index.html");
+    assert!(
+        first.contains(&"src/pages/blog/first.en.md".to_owned()),
+        "{first:?}"
+    );
+    assert!(
+        first.contains(&"src/layouts/page.html".to_owned()),
+        "{first:?}"
+    );
+    assert!(
+        first.contains(&"src/strings/en.toml".to_owned()),
+        "{first:?}"
+    );
+}
+
+#[test]
+fn an_empty_site_still_builds_its_skeleton() {
+    let dir = temp_dir("empty");
+    write(
+        &dir,
+        "rssite.toml",
+        "base_url = \"https://e.org\"\n[[languages]]\ncode = \"en\"\nname = \"E\"\n",
+    );
+    write(&dir, "templates/index.html", "empty");
+    build_ok(&dir);
+    let built = files_under(&dir.join("_site"));
+    assert_eq!(
+        built,
+        [
+            "404.html",
+            "en/404.html",
+            "en/atom.xml",
+            "en/index.html",
+            "highlight.css",
+            "index.html",
+            "robots.txt",
+            "sitemap.xml"
+        ]
+    );
+    let error = {
+        std::fs::remove_file(dir.join("templates/index.html")).unwrap();
+        build_err(&dir)
+    };
+    assert!(
+        error.contains("index.html"),
+        "the root listing needs its template:\n{error}"
+    );
+}
+
+// ── clean ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn clean_removes_planned_files_and_emptied_directories_only() {
+    let dir = site("clean");
+    build_ok(&dir);
+    write(&dir, "_site/keep.txt", "foreign");
+    write(&dir, "_site/en/blog/first/extra.txt", "foreign too");
+    let clean = run(&dir, &["clean"]);
+    assert!(clean.ok, "{}", clean.stderr);
+    let total = planned_paths(&plan_of(&dir)).len();
+    assert!(
+        clean.stderr.contains(&format!("removed {total} files")),
+        "{}",
+        clean.stderr
+    );
+    assert_eq!(
+        files_under(&dir.join("_site")),
+        ["en/blog/first/extra.txt", "keep.txt"]
+    );
+    assert!(!dir.join("_site/he").exists(), "emptied directories go");
+    assert!(
+        dir.join("_site/en/blog/first").is_dir(),
+        "a directory with a foreign file stays"
+    );
+    let again = run(&dir, &["clean"]);
+    assert!(again.ok);
+    assert!(again.stderr.contains("removed 0 files"));
+    std::fs::remove_dir_all(dir.join("_site")).unwrap();
+    let none = run(&dir, &["clean"]);
+    assert!(
+        none.ok,
+        "no output directory is not an error:\n{}",
+        none.stderr
+    );
+}
+
+#[test]
+fn clean_follows_the_current_plan() {
+    let dir = site("clean-plan");
+    build_ok(&dir);
+    std::fs::remove_file(dir.join("content/blog/third.en.md")).unwrap();
+    let clean = run(&dir, &["clean"]);
+    assert!(clean.ok);
+    assert!(
+        dir.join("_site/en/blog/third/index.html").is_file(),
+        "a file the plan no longer lists is not clean's to remove"
+    );
+    assert!(!dir.join("_site/en/blog/first").exists());
+}
+
+// ── query ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn query_prints_the_model_without_bodies() {
+    let dir = site("query");
+    let query = run(&dir, &["query"]);
+    assert!(query.ok, "{}", query.stderr);
+    let model: serde_json::Value = serde_json::from_str(&query.stdout).unwrap();
+    assert_eq!(model["version"], 1);
+    assert_eq!(
+        model["outputs"].as_u64().unwrap() as usize,
+        planned_paths(&plan_of(&dir)).len()
+    );
+    assert_eq!(model["config"]["base_url"], "https://example.org");
+    assert_eq!(model["config"]["extra"]["months_note"], "unused");
+    assert_eq!(model["config"]["fallback_language"], "en");
+    assert_eq!(model["languages"][1]["code"], "he");
+    assert_eq!(model["languages"][1]["direction"], "rtl");
+    let pages = model["pages"].as_array().unwrap();
+    assert_eq!(pages.len(), 8);
+    for page in pages {
+        assert!(
+            page.get("content").is_none()
+                && page.get("summary").is_none()
+                && page.get("toc").is_none(),
+            "{page}"
+        );
+        assert!(
+            page["permalink"]
+                .as_str()
+                .unwrap()
+                .starts_with("https://example.org/")
+        );
+    }
+    let second = pages
+        .iter()
+        .find(|p| p["relative_path"] == "blog/second.en.md")
+        .unwrap();
+    assert_eq!(second["word_count"], 11);
+    assert_eq!(second["updated"], "2026-03-01");
+    assert_eq!(second["taxonomies"]["tags"][0]["name"], "religion");
+    assert_eq!(second["next"]["title"], "First post");
+    let sections = model["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 6);
+    let blog = sections
+        .iter()
+        .find(|s| s["relative_path"] == "blog/_index.en.md")
+        .unwrap();
+    assert_eq!(blog["page_count"], 4);
+    assert_eq!(
+        blog["pages"][0],
+        serde_json::json!({"relative_path": "blog/renamed.en.md", "permalink": "https://example.org/en/blog/renamed/"})
+    );
+    assert_eq!(blog["years"][0]["count"], 4);
+    assert!(blog.get("content").is_none());
+    let taxonomies = model["taxonomies"].as_array().unwrap();
+    assert_eq!(taxonomies.len(), 2);
+    let tags = taxonomies.iter().find(|t| t["lang"] == "en").unwrap();
+    let religion = tags["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "religion")
+        .unwrap();
+    assert_eq!(
+        religion["pages"],
+        serde_json::json!(["blog/third.en.md", "blog/second.en.md", "blog/first.en.md"])
+    );
+    assert_eq!(religion["translations"][1]["name"], "דת");
+}
+
+// ── version, init, exit codes ─────────────────────────────────────────────
+
+#[test]
+fn version_prints_the_build_details() {
+    let dir = temp_dir("version");
+    let version = run(&dir, &["version"]);
+    assert!(version.ok);
+    assert!(
+        version.stdout.starts_with(&format!(
+            "rssite {} by Mark Veltzer",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{}",
+        version.stdout
+    );
+    for key in [
+        "GIT_DESCRIBE:",
+        "GIT_SHA:",
+        "GIT_BRANCH:",
+        "GIT_DIRTY:",
+        "RUSTC_SEMVER:",
+        "RUST_EDITION:",
+        "BUILD_TIMESTAMP:",
+    ] {
+        assert!(
+            version.stdout.contains(key),
+            "{key} missing from:\n{}",
+            version.stdout
+        );
+    }
+    let flag = Command::new(binary()).arg("--version").output().unwrap();
+    assert!(String::from_utf8_lossy(&flag.stdout).contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn init_writes_into_a_named_directory_and_never_over_a_site() {
+    let dir = temp_dir("init-dir");
+    let init = run(&dir, &["init", "site"]);
+    assert!(init.ok, "{}", init.stderr);
+    assert!(
+        init.stderr.contains("wrote 12 files into site"),
+        "{}",
+        init.stderr
+    );
+    assert!(dir.join("site/rssite.toml").is_file());
+    assert!(dir.join("site/content/blog/hello.en.md").is_file());
+    let again = run(&dir, &["init", "site"]);
+    assert!(!again.ok);
+    assert!(
+        again.stderr.contains("rssite.toml already exists in site"),
+        "{}",
+        again.stderr
+    );
+    let build = run(&dir.join("site"), &["build"]);
+    assert!(build.ok, "{}", build.stderr);
+    // A directory with one of the files but no config is refused too.
+    let partial = temp_dir("init-partial");
+    write(&partial, "templates/base.html", "mine");
+    let refused = run(&partial, &["init"]);
+    assert!(!refused.ok);
+    assert!(
+        refused
+            .stderr
+            .contains("templates/base.html already exists; init only writes into an empty site"),
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(read(&partial, "templates/base.html"), "mine");
+    assert!(
+        !partial.join("rssite.toml").exists(),
+        "nothing else was written"
+    );
+}
+
+#[test]
+fn the_root_flag_runs_against_another_directory() {
+    let dir = site("root-flag");
+    let elsewhere = temp_dir("root-flag-cwd");
+    let build = run(&elsewhere, &["-C", dir.to_str().unwrap(), "build"]);
+    assert!(build.ok, "{}", build.stderr);
+    assert!(dir.join("_site/en/index.html").is_file());
+    assert!(!elsewhere.join("_site").exists());
+    let long = run(
+        &elsewhere,
+        &["--root", dir.to_str().unwrap(), "--drafts", "plan"],
+    );
+    assert!(long.ok, "{}", long.stderr);
+    let after = run(&elsewhere, &["plan", "-C", dir.to_str().unwrap()]);
+    assert!(
+        after.ok,
+        "global flags may follow the command:\n{}",
+        after.stderr
+    );
+}
+
+#[test]
+fn errors_exit_with_one_and_a_prefix() {
+    let dir = temp_dir("exit-codes");
+    let output = Command::new(binary())
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.starts_with("error: "), "{stderr}");
+    assert!(stderr.contains("rssite.toml"), "{stderr}");
+    let unknown = Command::new(binary())
+        .arg("frobnicate")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(unknown.status.code(), Some(2), "clap's usage error");
+    let bad_flag = Command::new(binary())
+        .args(["build", "--nope"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(bad_flag.status.code(), Some(2));
+    let help = Command::new(binary())
+        .arg("--help")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        text.contains("--drafts") && text.contains("--root"),
+        "{text}"
+    );
+    let sub_help = Command::new(binary())
+        .args(["build", "--help"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&sub_help.stdout).contains("--verify-determinism"));
+}
+
+#[test]
+fn a_missing_or_broken_config_is_reported_by_path() {
+    let dir = temp_dir("config-errors");
+    let missing = run(&dir, &["plan"]);
+    assert!(
+        missing.stderr.contains("reading") && missing.stderr.contains("rssite.toml"),
+        "{}",
+        missing.stderr
+    );
+    write(
+        &dir,
+        "rssite.toml",
+        "base_url = \"https://x\"\n[[languages]]\ncode = \"en\"\n",
+    );
+    let invalid = run(&dir, &["plan"]);
+    assert!(
+        invalid.stderr.contains("parsing") && invalid.stderr.contains("missing field `name`"),
+        "{}",
+        invalid.stderr
+    );
+    write(&dir, "rssite.toml", "base_url = \"https://x\"\n");
+    let none = run(&dir, &["plan"]);
+    assert!(
+        none.stderr.contains("at least one [[languages]] entry"),
+        "{}",
+        none.stderr
+    );
+    let nowhere = run(&dir, &["-C", "does/not/exist", "plan"]);
+    assert!(
+        nowhere.stderr.contains("site root does/not/exist"),
+        "{}",
+        nowhere.stderr
+    );
+}
+
+#[test]
+fn verify_determinism_passes_on_the_fixture_with_every_feature_on() {
+    let dir = site("determinism");
+    prepend_config(&dir, "theme = \"t\"");
+    write(&dir, "themes/t/static/t.txt", "t");
+    write(
+        &dir,
+        "content/blog/old.en.md",
+        "+++\ntitle = \"Old\"\ndate = 2020-01-01\n+++\n\n```rust\nfn a() {}\n```\n\n| a |\n|---|\n| 1 |\n",
+    );
+    let check = run(&dir, &["check"]);
+    assert!(check.ok, "{}", check.stderr);
+    let build = run(&dir, &["build", "--verify-determinism", "--plan"]);
+    assert!(build.ok, "{}", build.stderr);
+}

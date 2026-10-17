@@ -283,6 +283,7 @@ fn take_date(table: &mut toml::Table, key: &str) -> Result<Option<DateValue>> {
     }
 }
 
+#[derive(Debug)]
 pub struct ParsedPageFront {
     pub front: PageFront,
     pub date: Option<DateValue>,
@@ -302,6 +303,7 @@ pub fn parse_page_front(mut table: toml::Table) -> Result<ParsedPageFront> {
     })
 }
 
+#[derive(Debug)]
 pub struct ParsedSectionFront {
     pub front: SectionFront,
     pub updated: Option<DateValue>,
@@ -388,5 +390,253 @@ mod tests {
     fn unknown_front_matter_key_is_an_error() {
         let table: toml::Table = toml::from_str("title = \"t\"\nlang = \"he\"").unwrap();
         assert!(parse_page_front(table).is_err());
+    }
+
+    #[test]
+    fn a_language_suffix_needs_a_name_before_it() {
+        let error = split_language(".en.md", &langs()).unwrap_err().to_string();
+        assert!(error.contains("no name before"), "{error}");
+    }
+
+    #[test]
+    fn a_suffix_that_is_not_a_language_code_is_part_of_the_name() {
+        // Four letters, digits, uppercase: not a language code, so with one
+        // language the whole stem is the name.
+        let one = vec!["en".to_owned()];
+        assert_eq!(
+            split_language("notes.draft.md", &one).unwrap().0,
+            "notes.draft"
+        );
+        assert_eq!(split_language("a.EN.md", &one).unwrap().0, "a.EN");
+        assert_eq!(split_language("a.v2.md", &one).unwrap().0, "a.v2");
+        assert!(looks_like_language("fr"));
+        assert!(looks_like_language("deu"));
+        assert!(!looks_like_language("f"));
+        assert!(!looks_like_language("abcd"));
+        assert!(!looks_like_language("e1"));
+        assert!(!looks_like_language("EN"));
+    }
+
+    #[test]
+    fn with_several_languages_a_lookalike_suffix_is_named_in_the_error() {
+        let error = split_language("post.de.md", &langs())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("\"de\""), "{error}");
+        assert!(error.contains("en, he"), "{error}");
+        let error = split_language("post.md", &langs()).unwrap_err().to_string();
+        assert!(error.contains("no language suffix"), "{error}");
+    }
+
+    #[test]
+    fn temp_and_hidden_files_are_skipped() {
+        for name in [
+            ".post.en.md",
+            "#post.en.md#",
+            "post.en.md~",
+            ".post.en.md.swp",
+        ] {
+            assert!(is_temp_file(name), "{name}");
+        }
+        for name in ["post.en.md", "_index.en.md", "a#b.en.md", "x.swp.en.md"] {
+            assert!(!is_temp_file(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn front_matter_accepts_crlf_and_a_byte_order_mark() {
+        let (front, body) =
+            split_front_matter("\u{feff}+++\r\ntitle = \"x\"\r\n+++\r\nbody\r\n", true).unwrap();
+        assert_eq!(front["title"].as_str(), Some("x"));
+        assert_eq!(body, "body\r\n");
+        let (front, body) = split_front_matter("+++\n+++\nonly body", true).unwrap();
+        assert!(front.is_empty());
+        assert_eq!(body, "only body");
+        let (_, body) = split_front_matter("+++\ntitle = \"x\"\n+++", true).unwrap();
+        assert_eq!(body, "", "a closing line without a newline still closes");
+    }
+
+    #[test]
+    fn front_matter_errors_say_what_is_wrong() {
+        let unclosed = split_front_matter("+++\ntitle = \"x\"\nbody\n", true).unwrap_err();
+        assert!(unclosed.to_string().contains("not closed"));
+        let missing = split_front_matter("body\n", true).unwrap_err();
+        assert!(missing.to_string().contains("no front matter"));
+        let invalid = format!(
+            "{:#}",
+            split_front_matter("+++\ntitle = \n+++\n", true).unwrap_err()
+        );
+        assert!(invalid.contains("not valid TOML"), "{invalid}");
+        // A +++ inside the body is not a delimiter.
+        let (_, body) = split_front_matter("+++\na = 1\n+++\ntext\n+++\nmore\n", true).unwrap();
+        assert_eq!(body, "text\n+++\nmore\n");
+    }
+
+    #[test]
+    fn optional_front_matter_for_html_and_tera_bodies() {
+        let (front, body) =
+            split_front_matter("+++\ntemplate = \"x.html\"\n+++\n<p>a</p>", false).unwrap();
+        assert_eq!(front["template"].as_str(), Some("x.html"));
+        assert_eq!(body, "<p>a</p>");
+        let (front, body) = split_front_matter("", false).unwrap();
+        assert!(front.is_empty() && body.is_empty());
+    }
+
+    #[test]
+    fn page_front_matter_fields_parse() {
+        let table: toml::Table = toml::from_str(
+            "title = \"T\"\ndescription = \"D\"\nslug = \"s\"\ntemplate = \"t.html\"\ndraft = true\nweight = 3\naliases = [\"/a/\"]\ntranslation_key = \"k\"\nbody_from = \"he\"\nsmart_punctuation = true\n[taxonomies]\ntags = [\"a\", \"b\"]\n[extra]\nx = 1\n",
+        )
+        .unwrap();
+        let parsed = parse_page_front(table).unwrap();
+        let front = parsed.front;
+        assert_eq!(front.title.as_deref(), Some("T"));
+        assert_eq!(front.description.as_deref(), Some("D"));
+        assert_eq!(front.slug.as_deref(), Some("s"));
+        assert_eq!(front.template.as_deref(), Some("t.html"));
+        assert!(front.draft);
+        assert_eq!(front.weight, Some(3));
+        assert_eq!(front.aliases, vec!["/a/".to_owned()]);
+        assert_eq!(front.translation_key.as_deref(), Some("k"));
+        assert_eq!(front.body_from.as_deref(), Some("he"));
+        assert_eq!(front.smart_punctuation, Some(true));
+        assert_eq!(
+            front.taxonomies["tags"],
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+        assert_eq!(front.extra["x"].as_integer(), Some(1));
+        assert!(parsed.date.is_none() && parsed.updated.is_none());
+        let empty = parse_page_front(toml::Table::new()).unwrap();
+        assert!(empty.front.title.is_none() && !empty.front.draft);
+    }
+
+    #[test]
+    fn a_date_that_is_not_a_date_is_an_error() {
+        let table: toml::Table = toml::from_str("title = \"t\"\ndate = 2026").unwrap();
+        let error = format!("{:#}", parse_page_front(table).unwrap_err());
+        assert!(error.contains("must be a date, found a integer"), "{error}");
+        let table: toml::Table = toml::from_str("title = \"t\"\ndate = \"yesterday\"").unwrap();
+        let error = format!("{:#}", parse_page_front(table).unwrap_err());
+        assert!(error.contains("front matter date"), "{error}");
+        assert!(error.contains("is not a date"), "{error}");
+        let table: toml::Table = toml::from_str("title = \"t\"\nupdated = true").unwrap();
+        assert!(parse_page_front(table).is_err());
+    }
+
+    #[test]
+    fn section_front_matter_parses_and_rejects_a_date() {
+        let table: toml::Table = toml::from_str(
+            "title = \"Blog\"\nsort_by = \"weight\"\npaginate_by = 5\npaginate_path = \"p\"\ngenerate_feeds = false\nyear_archives = true\narchive_template = \"y.html\"\npage_template = \"post.html\"\nupdated = 2026-02-02\n",
+        )
+        .unwrap();
+        let parsed = parse_section_front(table).unwrap();
+        assert_eq!(parsed.front.sort_by, SortBy::Weight);
+        assert_eq!(parsed.front.paginate_by, Some(5));
+        assert_eq!(parsed.front.paginate_path, "p");
+        assert_eq!(parsed.front.generate_feeds, Some(false));
+        assert!(parsed.front.year_archives);
+        assert_eq!(parsed.front.archive_template.as_deref(), Some("y.html"));
+        assert_eq!(parsed.front.page_template.as_deref(), Some("post.html"));
+        assert_eq!(parsed.updated.unwrap().ymd(), "2026-02-02");
+        let defaults = parse_section_front(toml::Table::new()).unwrap();
+        assert_eq!(defaults.front.sort_by, SortBy::None);
+        assert_eq!(defaults.front.paginate_path, "page");
+        assert!(defaults.front.generate_feeds.is_none());
+        let dated: toml::Table = toml::from_str("date = 2026-01-01").unwrap();
+        let error = parse_section_front(dated).unwrap_err().to_string();
+        assert!(error.contains("has no date"), "{error}");
+        let unknown: toml::Table = toml::from_str("sort_by = \"random\"").unwrap();
+        assert!(parse_section_front(unknown).is_err());
+        let page_key: toml::Table = toml::from_str("slug = \"x\"").unwrap();
+        assert!(parse_section_front(page_key).is_err(), "slug is a page key");
+    }
+
+    fn scan_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rssite-scan-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn put(dir: &Path, rel: &str, text: &str) {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn scanning_sorts_files_classifies_them_and_keeps_assets() {
+        let dir = scan_dir("classify");
+        put(&dir, "blog/_index.en.md", "+++\ntitle = \"B\"\n+++\n");
+        put(&dir, "blog/post.en.md", "+++\ntitle = \"P\"\n+++\nbody\n");
+        put(&dir, "blog/post.he.md", "+++\ntitle = \"פ\"\n+++\n");
+        put(&dir, "blog/image.png", "not really a png");
+        put(&dir, "blog/.post.en.md.swp", "junk");
+        put(&dir, "apps/_index.en.html", "<p>no front matter</p>");
+        put(
+            &dir,
+            "about.en.tera",
+            "+++\ntitle = \"A\"\n+++\n{{ page.title }}",
+        );
+        let (files, assets) = scan(&dir, &langs()).unwrap();
+        let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(
+            rels,
+            [
+                "about.en.tera",
+                "apps/_index.en.html",
+                "blog/_index.en.md",
+                "blog/post.en.md",
+                "blog/post.he.md"
+            ]
+        );
+        let about = &files[0];
+        assert_eq!(about.body_kind, BodyKind::Tera);
+        assert_eq!(about.kind, FileKind::Page);
+        assert!(about.components.is_empty());
+        assert_eq!(about.stem, "about");
+        assert_eq!(about.lang, "en");
+        assert_eq!(about.body, "{{ page.title }}");
+        let apps = &files[1];
+        assert_eq!(apps.body_kind, BodyKind::Html);
+        assert_eq!(apps.kind, FileKind::Index);
+        assert!(apps.front.is_empty());
+        assert_eq!(apps.body, "<p>no front matter</p>");
+        let index = &files[2];
+        assert_eq!(index.kind, FileKind::Index);
+        assert_eq!(index.components, vec!["blog".to_owned()]);
+        let post = &files[3];
+        assert_eq!(post.kind, FileKind::Page);
+        assert_eq!(post.body_kind, BodyKind::Markdown);
+        assert_eq!(post.front["title"].as_str(), Some("P"));
+        assert_eq!(post.body, "body\n");
+        assert_eq!(files[4].lang, "he");
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].name, "image.png");
+        assert_eq!(assets[0].components, vec!["blog".to_owned()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scanning_names_the_file_in_its_errors() {
+        let dir = scan_dir("errors");
+        put(&dir, "blog/post.en.md", "no front matter\n");
+        let error = format!("{:#}", scan(&dir, &langs()).unwrap_err());
+        assert!(error.contains("blog/post.en.md"), "{error}");
+        assert!(error.contains("front matter"), "{error}");
+        std::fs::remove_file(dir.join("blog/post.en.md")).unwrap();
+        put(&dir, "blog/post.md", "+++\n+++\n");
+        let error = format!("{:#}", scan(&dir, &langs()).unwrap_err());
+        assert!(error.contains("blog/post.md"), "{error}");
+        assert!(error.contains("language suffix"), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_missing_content_directory_is_an_empty_site() {
+        let dir = scan_dir("missing");
+        let (files, assets) = scan(&dir.join("content"), &langs()).unwrap();
+        assert!(files.is_empty() && assets.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

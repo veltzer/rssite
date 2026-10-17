@@ -82,7 +82,7 @@ A theme is a directory, `themes/<name>/`, with the same four directories a site 
 - A template is looked up in `templates/` first, then in the theme's `templates/`. A name that exists in both is the site's. The manifest lists the file that was used, `templates/base.html` or `themes/fleet/templates/base.html`, so an override is visible, never silent.
 - A sass file is compiled from whichever root has it; a partial (`_tokens.scss`) is found by `@use` in the site's `sass/` first, then the theme's, so the site can use a theme's partials and override them.
 - A static file is published from the site's `static/` if present there, otherwise from the theme's.
-- A translation file is layered: the theme's `i18n/<code>.toml` first, then the site's, key by key, so the site overrides single strings. A theme file for a language the site does not declare is an error.
+- A translation file is layered: the theme's `i18n/<code>.toml` first, then the site's, key by key, so the site overrides single strings. The `[dates]` table is taken from the last file that has one, so a site file of strings alone keeps the theme's month names. A theme file for a language the site does not declare is an error.
 
 A theme named in the configuration that does not exist is an error. A theme never changes which languages a site has, which taxonomies, or where the output goes; those stay in `rssite.toml`.
 

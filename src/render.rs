@@ -698,3 +698,96 @@ fn paginator_view(pages: &Value, by: usize, n: usize, base: &str, paginate_path:
         "total_pages": all.len(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pages(n: usize) -> Value {
+        Value::Array((1..=n).map(|i| json!({"n": i})).collect())
+    }
+
+    #[test]
+    fn a_paginator_slices_pages_and_links_its_neighbours() {
+        let base = "https://x/en/blog/";
+        let first = paginator_view(&pages(5), 2, 1, base, "page");
+        assert_eq!(first["paginate_by"], 2);
+        assert_eq!(first["number_pagers"], 3);
+        assert_eq!(first["current_index"], 1);
+        assert_eq!(first["first"], base);
+        assert_eq!(first["last"], "https://x/en/blog/page/3/");
+        assert!(first["previous"].is_null());
+        assert_eq!(first["next"], "https://x/en/blog/page/2/");
+        assert_eq!(first["pages"], json!([{"n": 1}, {"n": 2}]));
+        assert_eq!(first["total_pages"], 5);
+        assert_eq!(first["base_url"], base);
+
+        let middle = paginator_view(&pages(5), 2, 2, base, "page");
+        assert_eq!(middle["previous"], base, "page 1 is the bare section URL");
+        assert_eq!(middle["next"], "https://x/en/blog/page/3/");
+        assert_eq!(middle["pages"], json!([{"n": 3}, {"n": 4}]));
+
+        let last = paginator_view(&pages(5), 2, 3, base, "page");
+        assert_eq!(last["previous"], "https://x/en/blog/page/2/");
+        assert!(last["next"].is_null());
+        assert_eq!(last["pages"], json!([{"n": 5}]), "a short last page");
+    }
+
+    #[test]
+    fn a_paginator_over_nothing_is_one_empty_page() {
+        let view = paginator_view(&pages(0), 10, 1, "https://x/en/", "p");
+        assert_eq!(view["number_pagers"], 1);
+        assert_eq!(view["pages"], json!([]));
+        assert!(view["next"].is_null() && view["previous"].is_null());
+        assert_eq!(view["last"], "https://x/en/");
+        let beyond = paginator_view(&pages(3), 2, 5, "https://x/en/", "p");
+        assert_eq!(
+            beyond["pages"],
+            json!([]),
+            "past the end is empty, not a panic"
+        );
+        let custom = paginator_view(&pages(3), 1, 2, "https://x/en/", "seite");
+        assert_eq!(custom["next"], "https://x/en/seite/3/");
+    }
+
+    #[test]
+    fn alternates_map_language_to_permalink() {
+        let translations = json!([
+            {"lang": "en", "permalink": "https://x/en/a/", "title": "A"},
+            {"lang": "he", "permalink": "https://x/he/a/"},
+            {"lang": "fr"},
+            {"permalink": "https://x/nolang/"},
+        ]);
+        let map = alternates(&translations);
+        assert_eq!(
+            map,
+            json!({"en": "https://x/en/a/", "he": "https://x/he/a/"})
+        );
+        assert_eq!(alternates(&json!([])), json!({}));
+        assert_eq!(
+            alternates(&Value::Null),
+            json!({}),
+            "not a list: empty, not a panic"
+        );
+    }
+
+    #[test]
+    fn the_light_section_view_keeps_only_what_a_page_needs() {
+        let full = json!({
+            "title": "Blog",
+            "permalink": "https://x/en/blog/",
+            "path": "/en/blog/",
+            "lang": "en",
+            "description": "d",
+            "extra": {"k": 1},
+            "pages": [1, 2, 3],
+            "content": "<p>heavy</p>",
+        });
+        let view = light(&full);
+        assert_eq!(view["title"], "Blog");
+        assert_eq!(view["extra"]["k"], 1);
+        assert!(view.get("pages").is_none());
+        assert!(view.get("content").is_none());
+        assert_eq!(view.as_object().unwrap().len(), 6);
+    }
+}

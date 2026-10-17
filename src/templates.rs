@@ -600,16 +600,17 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
             };
             let rendered = crate::markdown::render(text, &options, &|_| None)
                 .map_err(|e| err(format!("markdown filter: {e}")))?;
-            let html = if inline {
-                rendered
-                    .html
-                    .trim()
+            // `inline` unwraps a single paragraph; anything else (several
+            // paragraphs, a heading, a list) is returned as it is.
+            let trimmed = rendered.html.trim();
+            let html = match (
+                inline,
+                trimmed
                     .strip_prefix("<p>")
-                    .and_then(|s| s.strip_suffix("</p>"))
-                    .map(str::to_owned)
-                    .unwrap_or(rendered.html)
-            } else {
-                rendered.html
+                    .and_then(|s| s.strip_suffix("</p>")),
+            ) {
+                (true, Some(inner)) if !inner.contains("<p>") => inner.to_owned(),
+                _ => rendered.html,
             };
             Ok(Value::String(html))
         },
@@ -649,4 +650,77 @@ pub fn render_str(
         .render_str(body, context)
         .map_err(|e| anyhow::anyhow!("{}", describe(&e)))
         .with_context(|| format!("rendering the template body of {what}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn string_arguments_are_typed() {
+        let a = args(&[("s", json!("x")), ("n", json!(1)), ("z", Value::Null)]);
+        assert_eq!(arg_string(&a, "s", "f").unwrap().as_deref(), Some("x"));
+        assert_eq!(arg_string(&a, "missing", "f").unwrap(), None);
+        assert_eq!(arg_string(&a, "z", "f").unwrap(), None, "null is absent");
+        let error = arg_string(&a, "n", "f").unwrap_err().to_string();
+        assert!(
+            error.contains("f: argument `n` must be a string"),
+            "{error}"
+        );
+        assert_eq!(require_string(&a, "s", "f").unwrap(), "x");
+        let error = require_string(&a, "missing", "f").unwrap_err().to_string();
+        assert!(error.contains("argument `missing` is required"), "{error}");
+        let error = require_string(&a, "z", "f").unwrap_err().to_string();
+        assert!(error.contains("is required"), "{error}");
+    }
+
+    #[test]
+    fn boolean_arguments_have_defaults() {
+        let a = args(&[("t", json!(true)), ("s", json!("true"))]);
+        assert!(arg_bool(&a, "t", "f", false).unwrap());
+        assert!(arg_bool(&a, "missing", "f", true).unwrap());
+        assert!(!arg_bool(&a, "missing", "f", false).unwrap());
+        let error = arg_bool(&a, "s", "f", false).unwrap_err().to_string();
+        assert!(
+            error.contains("must be a boolean"),
+            "a string is not a boolean: {error}"
+        );
+    }
+
+    #[test]
+    fn describe_flattens_the_cause_chain() {
+        let mut tera = Tera::default();
+        tera.add_raw_template("t.html", "{{ missing.field }}")
+            .unwrap();
+        let error = tera.render("t.html", &tera::Context::new()).unwrap_err();
+        let text = describe(&error);
+        assert!(text.contains("t.html"), "{text}");
+        assert!(
+            text.contains("missing"),
+            "the cause names the variable:\n{text}"
+        );
+        assert!(
+            text.contains(": "),
+            "causes are joined, not dropped:\n{text}"
+        );
+        let plain = describe(&tera::Error::msg("just this"));
+        assert_eq!(plain, "just this");
+    }
+
+    #[test]
+    fn a_parse_error_names_the_template() {
+        let mut tera = Tera::default();
+        let error = tera
+            .add_raw_template("broken.html", "{% if %}")
+            .unwrap_err();
+        let text = describe(&error);
+        assert!(text.contains("broken.html"), "{text}");
+    }
 }

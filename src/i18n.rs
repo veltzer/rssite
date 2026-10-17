@@ -90,6 +90,10 @@ pub struct Translations {
     pub paths: Vec<PathBuf>,
     pub strings: BTreeMap<String, String>,
     pub dates: DateNames,
+    /// Whether a `[dates]` table was read, as opposed to the English
+    /// defaults standing in; a layer without one leaves an earlier layer's
+    /// names alone.
+    dates_set: bool,
 }
 
 impl Translations {
@@ -104,6 +108,7 @@ impl Translations {
             paths: Vec::new(),
             strings: BTreeMap::new(),
             dates: DateNames::english(),
+            dates_set: false,
         };
         for dir in dirs {
             let layer = Self::load(dir, code)?;
@@ -112,7 +117,10 @@ impl Translations {
             }
             merged.paths.extend(layer.paths);
             merged.strings.extend(layer.strings);
-            merged.dates = layer.dates;
+            if layer.dates_set {
+                merged.dates = layer.dates;
+                merged.dates_set = true;
+            }
         }
         Ok(merged)
     }
@@ -127,6 +135,7 @@ impl Translations {
                 paths: Vec::new(),
                 strings: BTreeMap::new(),
                 dates: DateNames::english(),
+                dates_set: false,
             });
         }
         let text = crate::util::read(&path)?;
@@ -134,9 +143,11 @@ impl Translations {
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         let mut strings = BTreeMap::new();
         let mut dates = DateNames::english();
+        let mut dates_set = false;
         for (key, value) in table {
             match (key.as_str(), value) {
                 ("dates", toml::Value::Table(t)) => {
+                    dates_set = true;
                     let names: DateNames = toml::Value::Table(t)
                         .try_into()
                         .with_context(|| format!("{}: [dates]", path.display()))?;
@@ -185,6 +196,7 @@ impl Translations {
             paths: vec![path],
             strings,
             dates,
+            dates_set,
         })
     }
 
@@ -352,5 +364,268 @@ mod tests {
         let names = DateNames::english();
         assert!(format_date("2026-04-28", "%Q", &names).is_err());
         assert!(format_date("not a date", "%Y", &names).is_err());
+    }
+
+    #[test]
+    fn date_values_parse_every_documented_form() {
+        assert_eq!(DateValue::parse("2026-04-28").unwrap().ymd(), "2026-04-28");
+        assert_eq!(
+            DateValue::parse("2026-04-28").unwrap().rfc3339(),
+            "2026-04-28T00:00:00+00:00",
+            "a bare date is midnight UTC"
+        );
+        assert_eq!(
+            DateValue::parse("2026-04-28T10:30:00").unwrap().rfc3339(),
+            "2026-04-28T10:30:00+00:00"
+        );
+        assert_eq!(
+            DateValue::parse("2026-04-28 10:30:00").unwrap().rfc3339(),
+            "2026-04-28T10:30:00+00:00"
+        );
+        assert_eq!(
+            DateValue::parse("2026-04-28T10:30:00.5").unwrap().rfc3339(),
+            "2026-04-28T10:30:00.500+00:00"
+        );
+        assert_eq!(
+            DateValue::parse("2026-04-28T10:30:00+02:00")
+                .unwrap()
+                .rfc3339(),
+            "2026-04-28T10:30:00+02:00",
+            "an offset is kept, not normalised"
+        );
+        assert_eq!(
+            DateValue::parse("2026-04-28T10:30:00Z").unwrap().rfc3339(),
+            "2026-04-28T10:30:00+00:00"
+        );
+        assert_eq!(
+            DateValue::parse("  2026-04-28 \n").unwrap().ymd(),
+            "2026-04-28"
+        );
+    }
+
+    #[test]
+    fn date_values_reject_what_is_not_a_date() {
+        for text in [
+            "",
+            "2026",
+            "2026-13-01",
+            "2026-02-30",
+            "28/04/2026",
+            "2026-04-28T25:00:00",
+            "April 28",
+        ] {
+            let error = DateValue::parse(text).unwrap_err().to_string();
+            assert!(error.contains("is not a date"), "{text:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn date_values_order_by_instant() {
+        let a = DateValue::parse("2026-04-28T10:00:00+02:00").unwrap();
+        let b = DateValue::parse("2026-04-28T09:00:00+00:00").unwrap();
+        let c = DateValue::parse("2026-04-28").unwrap();
+        assert!(b > a, "09:00Z is after 10:00+02:00 (08:00Z)");
+        assert!(a > c);
+        assert_eq!(a, DateValue::parse("2026-04-28T08:00:00Z").unwrap());
+    }
+
+    #[test]
+    fn every_name_placeholder_is_substituted() {
+        let mut names = DateNames::english();
+        names.months[0] = "ינואר".into();
+        names.months_short[0] = "ינו".into();
+        names.weekdays[4] = "חמישי".into();
+        names.weekdays_short[4] = "ה".into();
+        // 2026-01-01 is a Thursday.
+        assert_eq!(
+            format_date("2026-01-01", "%A %a %B %b %d", &names).unwrap(),
+            "חמישי ה ינואר ינו 01"
+        );
+        assert_eq!(
+            format_date("2026-01-01", "%B%B", &names).unwrap(),
+            "ינוארינואר"
+        );
+    }
+
+    #[test]
+    fn percent_sequences_that_are_not_names_pass_to_chrono() {
+        let names = DateNames::english();
+        assert_eq!(
+            format_date("2026-01-01", "%Y/%m/%d", &names).unwrap(),
+            "2026/01/01"
+        );
+        assert_eq!(format_date("2026-01-01", "%e", &names).unwrap(), " 1");
+        assert_eq!(format_date("2026-01-01", "%j", &names).unwrap(), "001");
+        assert_eq!(
+            format_date("2026-01-01", "%F", &names).unwrap(),
+            "2026-01-01"
+        );
+        assert_eq!(
+            format_date("2026-01-01", "literal", &names).unwrap(),
+            "literal"
+        );
+        assert_eq!(format_date("2026-01-01", "", &names).unwrap(), "");
+    }
+
+    #[test]
+    fn a_trailing_percent_is_an_error_not_a_panic() {
+        let names = DateNames::english();
+        assert!(format_date("2026-01-01", "%Y %", &names).is_err());
+    }
+
+    #[test]
+    fn formatting_uses_the_offset_the_date_was_written_in() {
+        let names = DateNames::english();
+        assert_eq!(
+            format_date("2026-01-01T23:30:00+02:00", "%Y-%m-%d %H:%M %z", &names).unwrap(),
+            "2026-01-01 23:30 +0200"
+        );
+        // Crossing midnight in the offset: the weekday is the local one.
+        assert_eq!(
+            format_date("2026-01-01T23:30:00-05:00", "%A", &names).unwrap(),
+            "Thursday"
+        );
+    }
+
+    #[test]
+    fn english_names_are_complete() {
+        let names = DateNames::english();
+        assert_eq!(names.months.len(), 12);
+        assert_eq!(names.months_short.len(), 12);
+        assert_eq!(names.weekdays.len(), 7);
+        assert_eq!(names.weekdays_short.len(), 7);
+        assert_eq!(names.weekdays[0], "Sunday");
+        assert_eq!(names.months_short[8], "Sep");
+        assert_eq!(names.months_short[4], "May");
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rssite-i18n-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_table_with_english_dates() {
+        let dir = temp("missing");
+        let t = Translations::load(&dir, "en").unwrap();
+        assert!(t.paths.is_empty());
+        assert!(t.strings.is_empty());
+        assert_eq!(t.dates.months[0], "January");
+        let error = t.get("nav").unwrap_err().to_string();
+        assert!(error.contains("i18n/en.toml (no such file)"), "{error}");
+        assert!(error.contains("\"nav\""), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn strings_and_dates_load_from_a_file() {
+        let dir = temp("load");
+        std::fs::write(
+            dir.join("he.toml"),
+            "nav = \"ניווט\"\nempty = \"\"\n[dates]\nmonths = [\"א\", \"ב\", \"ג\", \"ד\", \"ה\", \"ו\", \"ז\", \"ח\", \"ט\", \"י\", \"יא\", \"יב\"]\nweekdays = [\"ראשון\", \"שני\", \"שלישי\", \"רביעי\", \"חמישי\", \"שישי\", \"שבת\"]\n",
+        )
+        .unwrap();
+        let t = Translations::load(&dir, "he").unwrap();
+        assert_eq!(t.paths, vec![dir.join("he.toml")]);
+        assert_eq!(t.get("nav").unwrap(), "ניווט");
+        assert_eq!(t.get("empty").unwrap(), "");
+        assert_eq!(t.dates.months[11], "יב");
+        assert_eq!(t.dates.weekdays[6], "שבת");
+        assert_eq!(
+            t.dates.months_short[0], "Jan",
+            "unset short names fall back to English"
+        );
+        assert_eq!(t.dates.weekdays_short[0], "Sun");
+        let error = t.get("missing").unwrap_err().to_string();
+        assert!(error.contains("he.toml"), "{error}");
+        assert!(error.contains("\"he\""), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn non_string_values_are_rejected() {
+        let dir = temp("types");
+        for text in ["n = 1\n", "b = true\n", "l = [\"a\"]\n", "[t]\nx = \"y\"\n"] {
+            std::fs::write(dir.join("en.toml"), text).unwrap();
+            let error = format!("{:#}", Translations::load(&dir, "en").unwrap_err());
+            assert!(error.contains("must be a string"), "{text:?}: {error}");
+            assert!(error.contains("en.toml"), "{error}");
+        }
+        std::fs::write(dir.join("en.toml"), "not toml =\n").unwrap();
+        let error = format!("{:#}", Translations::load(&dir, "en").unwrap_err());
+        assert!(error.contains("parsing"), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn date_name_lists_are_checked_for_length() {
+        let dir = temp("lengths");
+        let cases = [
+            ("[dates]\nmonths = [\"a\"]\n", "months must list 12"),
+            (
+                "[dates]\nmonths = [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\"]\nmonths_short = [\"a\"]\n",
+                "months_short must list 12",
+            ),
+            (
+                "[dates]\nmonths = [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\"]\nweekdays = [\"a\"]\n",
+                "weekdays must list 7",
+            ),
+            (
+                "[dates]\nmonths = [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\"]\nweekdays_short = [\"a\"]\n",
+                "weekdays_short must list 7",
+            ),
+            ("[dates]\nweekdays = [\"a\"]\n", "months"),
+            (
+                "[dates]\nmonths = [\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\",\"9\",\"10\",\"11\",\"12\"]\nmonth = []\n",
+                "unknown field",
+            ),
+        ];
+        for (text, needle) in cases {
+            std::fs::write(dir.join("en.toml"), text).unwrap();
+            let error = format!("{:#}", Translations::load(&dir, "en").unwrap_err());
+            assert!(error.contains(needle), "{text:?}: {error}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn layers_override_key_by_key_and_remember_every_file() {
+        let dir = temp("layers");
+        let theme = dir.join("theme");
+        let site = dir.join("site");
+        std::fs::create_dir_all(&theme).unwrap();
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::write(
+            theme.join("en.toml"),
+            "a = \"theme a\"\nb = \"theme b\"\n[dates]\nmonths = [\"t1\",\"t2\",\"t3\",\"t4\",\"t5\",\"t6\",\"t7\",\"t8\",\"t9\",\"t10\",\"t11\",\"t12\"]\n",
+        )
+        .unwrap();
+        std::fs::write(site.join("en.toml"), "b = \"site b\"\nc = \"site c\"\n").unwrap();
+        let t = Translations::load_layered(&[theme.clone(), site.clone()], "en").unwrap();
+        assert_eq!(t.get("a").unwrap(), "theme a");
+        assert_eq!(t.get("b").unwrap(), "site b");
+        assert_eq!(t.get("c").unwrap(), "site c");
+        assert_eq!(t.paths, vec![theme.join("en.toml"), site.join("en.toml")]);
+        assert_eq!(
+            t.dates.months[0], "t1",
+            "a layer without [dates] leaves the theme's names alone"
+        );
+        let error = t.get("d").unwrap_err().to_string();
+        assert!(
+            error.contains("site/en.toml"),
+            "the site's file is named:\n{error}"
+        );
+        // A layer without the file contributes nothing and is not listed.
+        let only_theme =
+            Translations::load_layered(&[site.join("none"), theme.clone()], "en").unwrap();
+        assert_eq!(only_theme.paths, vec![theme.join("en.toml")]);
+        assert_eq!(only_theme.dates.months[0], "t1");
+        // No layer at all.
+        let none = Translations::load_layered(&[], "en").unwrap();
+        assert!(none.paths.is_empty());
+        assert_eq!(none.code, "en");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

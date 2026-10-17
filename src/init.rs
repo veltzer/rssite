@@ -252,8 +252,8 @@ pub fn init(dir: &Path) -> Result<usize> {
             dir.display()
         );
     }
-    let mut written = 0;
-    for (name, content) in FILES {
+    // Refuse before writing anything, so a refusal leaves no half-site.
+    for (name, _) in FILES {
         let path = dir.join(name);
         if path.exists() {
             bail!(
@@ -261,6 +261,10 @@ pub fn init(dir: &Path) -> Result<usize> {
                 path.display()
             );
         }
+    }
+    let mut written = 0;
+    for (name, content) in FILES {
+        let path = dir.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

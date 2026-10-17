@@ -101,4 +101,4 @@ Within a section's order, every page has `previous` and `next`.
 
 ## Drafts
 
-`draft = true` on a page or a section leaves it out of the build. A draft section takes its pages with it. `--drafts` includes them all.
+`draft = true` on a page or a section leaves it out of the build. A draft section takes its pages and assets with it. `--drafts` includes them all.
