@@ -380,7 +380,7 @@ impl Site {
             .unwrap_or_else(|| format!("/{lang}/"))
     }
 
-    fn permalink(&self, path: &str) -> String {
+    pub(crate) fn permalink(&self, path: &str) -> String {
         format!("{}{}", self.config.base_url, path)
     }
 
@@ -496,7 +496,7 @@ impl Site {
         })
     }
 
-    fn section_path(&self, lang: &str, components: &[String]) -> Result<String> {
+    pub(crate) fn section_path(&self, lang: &str, components: &[String]) -> Result<String> {
         let mut path = self.prefix(lang);
         for component in components {
             let slug = slugify(component, self.config.slugify.paths);
@@ -963,12 +963,21 @@ impl Site {
                 self.pages[p].file.rel.clone(),
             ));
         }
-        if let Some(&s) = self.section_lookup.get(&(lang, key)) {
+        if let Some(&s) = self.section_lookup.get(&(lang.clone(), key.clone())) {
             let section = &self.sections[s];
             return Some((
                 section.permalink.clone(),
                 section.rel().unwrap_or("").to_owned(),
             ));
+        }
+        if let Some(asset) = self.assets.iter().find(|a| {
+            let rel = a.rel();
+            rel == path || rel == key
+        }) && !self.under_drafted_section(&asset.components, &lang)
+            && let Ok(dir) = self.section_path(&lang, &asset.components)
+        {
+            let permalink = self.permalink(&format!("{dir}{}", asset.name));
+            return Some((permalink, asset.rel()));
         }
         None
     }
@@ -1154,6 +1163,30 @@ impl Site {
             sources.insert(self.templates.origins[template].clone());
         }
         (sources, cross, data)
+    }
+
+    pub fn body_template_sources(&self, body: &str) -> (BTreeSet<String>, bool, Vec<String>) {
+        let mut cross = reads_other_pages(body);
+        let mut data = load_data_paths(body);
+        let mut sources = BTreeSet::new();
+        for name in template_references(body) {
+            let (files, t_cross, t_data) = self.template_sources(&name);
+            sources.extend(files);
+            cross |= t_cross;
+            data.extend(t_data);
+        }
+        (sources, cross, data)
+    }
+
+    pub fn template_reads_translations(&self, name: &str) -> bool {
+        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = RE.get_or_init(|| {
+            regex::Regex::new(r"\b(?:translations|alternates)\b").expect("valid regex")
+        });
+        self.templates
+            .closure(name)
+            .into_iter()
+            .any(|t| re.is_match(&self.templates.files[&t]))
     }
 }
 

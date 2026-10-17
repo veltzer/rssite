@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tera::Tera;
 
+#[derive(Clone)]
 pub struct Model {
     pub config: Value,
     pub languages: Vec<Value>,
@@ -20,6 +21,7 @@ pub struct Model {
     pub taxonomies: Vec<Value>,
     pub page_lookup: BTreeMap<(String, String), usize>,
     pub section_lookup: BTreeMap<(String, String), usize>,
+    pub asset_lookup: BTreeMap<(String, String), String>,
     pub taxonomy_lookup: BTreeMap<(String, String), usize>,
     /// (lang, taxonomy, term name) -> permalink
     pub term_lookup: BTreeMap<(String, String, String), String>,

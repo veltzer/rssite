@@ -51,6 +51,16 @@ pub struct ContentAsset {
     pub name: String,
 }
 
+impl ContentAsset {
+    pub fn rel(&self) -> String {
+        if self.components.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{}/{}", self.components.join("/"), self.name)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SortBy {
