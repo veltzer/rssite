@@ -30,6 +30,7 @@ pub struct Model {
     pub root: PathBuf,
     pub planned: BTreeSet<String>,
     pub language_codes: Vec<String>,
+    pub markdown_options: crate::markdown::RenderOptions,
 }
 
 fn light_page(page: &Page) -> Value {
@@ -190,7 +191,7 @@ pub fn language_view(site: &Site, code: &str) -> Value {
         "url_prefix": language.prefix(),
         "title": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
         "description": language.description.clone().unwrap_or_else(|| site.config.description.clone()),
-        "generate_feeds": language.generate_feeds,
+        "generate_feeds": site.language_feeds(code),
     })
 }
 
@@ -278,6 +279,11 @@ impl Model {
             root: site.root.clone(),
             planned,
             language_codes,
+            markdown_options: crate::markdown::RenderOptions {
+                smart_punctuation: site.config.markdown.smart_punctuation,
+                highlight: site.config.markdown.highlight,
+                anchor_mode: site.config.slugify.anchors,
+            },
         }
     }
 
@@ -290,12 +296,7 @@ impl Model {
             .unwrap_or(file_name);
         let (lang, key) = match without_ext.rsplit_once('.') {
             Some((_, suffix)) if self.language_codes.iter().any(|c| c == suffix) => {
-                let suffix_dot = format!(".{suffix}.");
-                let at = path.rfind(&suffix_dot)?;
-                (
-                    suffix.to_owned(),
-                    format!("{}.{}", &path[..at], &path[at + suffix_dot.len()..]),
-                )
+                (suffix.to_owned(), crate::site::strip_lang(path, suffix))
             }
             _ => (lang.to_owned(), path.to_owned()),
         };
@@ -448,8 +449,15 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
             let lang = lang_arg(args, "get_url", &lang, &model)?;
             let check = arg_bool(args, "check", "get_url", true)?;
             if let Some(content) = path.strip_prefix("@/") {
-                return match model.resolve(content, &lang) {
-                    Some((permalink, _)) => Ok(Value::String(permalink)),
+                let (content_path, fragment) = match content.split_once('#') {
+                    Some((p, f)) => (p, Some(f)),
+                    None => (content, None),
+                };
+                return match model.resolve(content_path, &lang) {
+                    Some((permalink, _)) => Ok(Value::String(match fragment {
+                        Some(f) => format!("{permalink}#{f}"),
+                        None => permalink,
+                    })),
                     None => Err(err(format!("get_url: no content file matches {path:?} in language {lang}"))),
                 };
             }
@@ -609,35 +617,33 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
             Ok(Value::String(crate::slug::slugify(text, mode)))
         },
     );
-    tera.register_filter(
-        "markdown",
-        |value: &Value, args: &HashMap<String, Value>| -> tera::Result<Value> {
-            let text = value
-                .as_str()
-                .ok_or_else(|| err("markdown: the value must be a string".to_owned()))?;
-            let inline = arg_bool(args, "inline", "markdown", false)?;
-            let options = crate::markdown::RenderOptions {
-                smart_punctuation: false,
-                highlight: false,
-                anchor_mode: crate::slug::SlugMode::Safe,
-            };
-            let rendered = crate::markdown::render(text, &options, &|_| None)
-                .map_err(|e| err(format!("markdown filter: {e}")))?;
-            // `inline` unwraps a single paragraph; anything else (several
-            // paragraphs, a heading, a list) is returned as it is.
-            let trimmed = rendered.html.trim();
-            let html = match (
-                inline,
-                trimmed
-                    .strip_prefix("<p>")
-                    .and_then(|s| s.strip_suffix("</p>")),
-            ) {
-                (true, Some(inner)) if !inner.contains("<p>") => inner.to_owned(),
-                _ => rendered.html,
-            };
-            Ok(Value::String(html))
-        },
-    );
+    {
+        let model = Arc::clone(model);
+        tera.register_filter(
+            "markdown",
+            move |value: &Value, args: &HashMap<String, Value>| -> tera::Result<Value> {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| err("markdown: the value must be a string".to_owned()))?;
+                let inline = arg_bool(args, "inline", "markdown", false)?;
+                let rendered = crate::markdown::render(text, &model.markdown_options, &|_| None)
+                    .map_err(|e| err(format!("markdown filter: {e}")))?;
+                // `inline` unwraps a single paragraph; anything else (several
+                // paragraphs, a heading, a list) is returned as it is.
+                let trimmed = rendered.html.trim();
+                let html = match (
+                    inline,
+                    trimmed
+                        .strip_prefix("<p>")
+                        .and_then(|s| s.strip_suffix("</p>")),
+                ) {
+                    (true, Some(inner)) if !inner.contains("<p>") => inner.to_owned(),
+                    _ => rendered.html,
+                };
+                Ok(Value::String(html))
+            },
+        );
+    }
     Ok(Engine { tera, lang })
 }
 

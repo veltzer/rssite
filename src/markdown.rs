@@ -32,6 +32,7 @@ pub struct Rendered {
     pub links: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
 pub struct RenderOptions {
     pub smart_punctuation: bool,
     pub highlight: bool,
@@ -119,9 +120,12 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 let lang = match kind {
-                    CodeBlockKind::Fenced(info) => {
-                        info.split([' ', ',']).next().unwrap_or("").to_owned()
-                    }
+                    CodeBlockKind::Fenced(info) => info
+                        .trim()
+                        .split([' ', '\t', ','])
+                        .next()
+                        .unwrap_or("")
+                        .to_owned(),
                     CodeBlockKind::Indented => String::new(),
                 };
                 code = Some((lang, String::new()));
@@ -686,5 +690,11 @@ mod tests {
         assert_eq!(json[0]["id"], "t");
         assert_eq!(json[0]["level"], 1);
         assert_eq!(json[0]["children"][0]["title"], "U");
+    }
+
+    #[test]
+    fn fenced_code_info_string_trims_leading_space_and_splits_tabs() {
+        let out = render("``` rust\tlinenos\nx\n```\n", &opts(), &no_links).unwrap();
+        assert!(out.html.contains("class=\"language-rust\""), "{}", out.html);
     }
 }

@@ -249,16 +249,15 @@ fn looks_like_language(suffix: &str) -> bool {
 /// file without front matter is an empty table and the whole text.
 pub fn split_front_matter(text: &str, required: bool) -> Result<(toml::Table, String)> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let Some(rest) = text.strip_prefix("+++") else {
+    let Some(rest) = text
+        .strip_prefix("+++\r\n")
+        .or_else(|| text.strip_prefix("+++\n"))
+    else {
         if required {
             bail!("no front matter: the file must start with a +++ line");
         }
         return Ok((toml::Table::new(), text.to_owned()));
     };
-    let rest = rest
-        .strip_prefix("\r\n")
-        .or_else(|| rest.strip_prefix('\n'))
-        .unwrap_or(rest);
     let mut front_end = None;
     let mut offset = 0;
     for line in rest.split_inclusive('\n') {
@@ -324,9 +323,16 @@ pub fn parse_section_front(mut table: toml::Table) -> Result<ParsedSectionFront>
         bail!("front matter: a section (_index) has no date; use `updated` for the sitemap");
     }
     let updated = take_date(&mut table, "updated")?;
-    let front: SectionFront = toml::Value::Table(table)
+    let mut front: SectionFront = toml::Value::Table(table)
         .try_into()
         .context("front matter")?;
+    front.paginate_path = front.paginate_path.trim_matches('/').to_owned();
+    if front.paginate_path.is_empty() || front.paginate_path.split('/').any(|p| p == "..") {
+        bail!(
+            "front matter: paginate_path {:?} must be a relative, non-empty path",
+            front.paginate_path
+        );
+    }
     Ok(ParsedSectionFront { front, updated })
 }
 
@@ -648,5 +654,16 @@ mod tests {
         let (files, assets) = scan(&dir.join("content"), &langs()).unwrap();
         assert!(files.is_empty() && assets.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn opening_front_matter_delimiter_requires_its_own_line_and_paginate_path_is_validated() {
+        assert!(split_front_matter("+++title = \"x\"\n+++\nbody", true).is_err());
+        let ok: toml::Table = toml::from_str("paginate_path = \"/p/\"").unwrap();
+        assert_eq!(parse_section_front(ok).unwrap().front.paginate_path, "p");
+        for bad in ["paginate_path = \"\"", "paginate_path = \"../p\""] {
+            let table: toml::Table = toml::from_str(bad).unwrap();
+            assert!(parse_section_front(table).is_err(), "{bad}");
+        }
     }
 }

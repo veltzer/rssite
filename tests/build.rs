@@ -791,3 +791,36 @@ fn verify_determinism_passes_on_the_fixture_with_every_feature_on() {
     let build = run(&dir, &["build", "--verify-determinism", "--plan"]);
     assert!(build.ok, "{}", build.stderr);
 }
+
+#[test]
+fn get_url_fragments_optional_load_data_and_markdown_filter_options_work() {
+    let dir = site("low-fixes");
+    let cfg = read(&dir, "rssite.toml");
+    write(
+        &dir,
+        "rssite.toml",
+        &format!("{cfg}\n[markdown]\nsmart_punctuation = true\n"),
+    );
+    write(
+        &dir,
+        "content/about.en.tera",
+        "+++\ntitle = \"About\"\ntemplate = \"page.html\"\ndate = 2026-01-01\n+++\n{{ get_url(path=\"@/blog/first.md#part\") }}|{{ load_data(required=false, path=\"data/missing.toml\") }}|{{ \"a -- b\" | markdown(inline=true) | safe }}",
+    );
+    let plan = plan_of(&dir);
+    let about_sources = sources_of(&plan, "_site/en/about/index.html");
+    assert!(
+        about_sources.contains(&"content/blog/first.en.md".to_owned()),
+        "{about_sources:?}"
+    );
+    assert!(
+        !about_sources.contains(&"data/missing.toml".to_owned()),
+        "missing optional load_data file must not be listed in sources: {about_sources:?}"
+    );
+    assert!(run(&dir, &["build"]).ok);
+    let html = read(&dir, "_site/en/about/index.html");
+    assert!(
+        html.contains("https://example.org/en/blog/first/#part"),
+        "{html}"
+    );
+    assert!(html.contains("a \u{2013} b"), "{html}");
+}

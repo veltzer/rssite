@@ -114,7 +114,7 @@ impl Plan {
         };
         let with_template =
             |mut sources: BTreeSet<String>, template: &str, lang: &str| -> BTreeSet<String> {
-                let (files, cross, data) = site.template_sources(template);
+                let (files, cross, data) = site.template_sources(template, lang);
                 sources.extend(files);
                 sources.extend(data);
                 sources.extend(common(lang));
@@ -140,7 +140,8 @@ impl Plan {
             }
             let body_file = &site.pages[page.body_source.unwrap_or(i)].file;
             if body_file.body_kind == crate::content::BodyKind::Tera {
-                let (files, cross, data) = site.body_template_sources(&body_file.body);
+                let (files, cross, data) =
+                    site.body_template_sources(&body_file.body, &page.file.lang);
                 sources.extend(files);
                 sources.extend(data);
                 if cross {
@@ -184,7 +185,8 @@ impl Plan {
             if let Some(body_file) = &site.sections[section.body_source.unwrap_or(i)].file
                 && body_file.body_kind == crate::content::BodyKind::Tera
             {
-                let (files, cross, data) = site.body_template_sources(&body_file.body);
+                let (files, cross, data) =
+                    site.body_template_sources(&body_file.body, &section.lang);
                 sources.extend(files);
                 sources.extend(data);
                 if cross {
@@ -291,11 +293,14 @@ impl Plan {
             });
         }
         let fallback = site.config.fallback().to_owned();
-        outputs.push(Output {
-            path: "404.html".to_owned(),
-            sources: with_template(BTreeSet::new(), "404.html", &fallback),
-            kind: Kind::NotFound(fallback.clone()),
-        });
+        let has_root_lang = site.config.languages.iter().any(|l| l.prefix() == "/");
+        if !has_root_lang {
+            outputs.push(Output {
+                path: "404.html".to_owned(),
+                sources: with_template(BTreeSet::new(), "404.html", &fallback),
+                kind: Kind::NotFound(fallback.clone()),
+            });
+        }
 
         // Taxonomies.
         for (t, taxonomy) in site.taxonomies.iter().enumerate() {
@@ -385,7 +390,7 @@ impl Plan {
                 kind: Kind::Robots,
             });
         }
-        {
+        if !has_root_lang {
             let mut sources = BTreeSet::new();
             sources.insert(config_file.clone());
             let sources = if site.templates.has("root.html") {

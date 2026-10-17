@@ -300,7 +300,7 @@ impl Config {
             Some(_) => {}
         }
         let mut names = std::collections::BTreeSet::new();
-        for taxonomy in &self.taxonomies {
+        for taxonomy in &mut self.taxonomies {
             if taxonomy.name.is_empty() {
                 bail!("{CONFIG_FILE}: a taxonomy needs a name");
             }
@@ -310,19 +310,59 @@ impl Config {
                     taxonomy.name
                 );
             }
+            taxonomy.paginate_path = taxonomy.paginate_path.trim_matches('/').to_owned();
+            if taxonomy.paginate_path.is_empty()
+                || taxonomy.paginate_path.split('/').any(|p| p == "..")
+            {
+                bail!(
+                    "{CONFIG_FILE}: taxonomy {}: paginate_path {:?} must be a relative, non-empty path",
+                    taxonomy.name,
+                    taxonomy.paginate_path
+                );
+            }
+            if let Some(translations) = &mut taxonomy.translations {
+                while translations.ends_with('/') {
+                    translations.pop();
+                }
+                if translations.is_empty()
+                    || Path::new(translations).is_absolute()
+                    || translations.split('/').any(|p| p == "..")
+                {
+                    bail!(
+                        "{CONFIG_FILE}: taxonomy {}: translations {translations:?} must be a relative path inside the site",
+                        taxonomy.name
+                    );
+                }
+            }
         }
         for dir in [
-            &self.content_dir,
-            &self.templates_dir,
-            &self.static_dir,
-            &self.sass_dir,
-            &self.i18n_dir,
-            &self.output_dir,
-            &self.themes_dir,
+            &mut self.content_dir,
+            &mut self.templates_dir,
+            &mut self.static_dir,
+            &mut self.sass_dir,
+            &mut self.i18n_dir,
+            &mut self.output_dir,
+            &mut self.themes_dir,
         ] {
-            if dir.is_empty() || Path::new(dir).is_absolute() {
+            while dir.ends_with('/') {
+                dir.pop();
+            }
+            if dir.is_empty()
+                || Path::new(&*dir).is_absolute()
+                || dir.split('/').any(|part| part == "..")
+            {
                 bail!("{CONFIG_FILE}: directory {dir:?} must be a relative, non-empty path");
             }
+        }
+        if self.feeds.filename.is_empty()
+            || self.feeds.filename.starts_with('/')
+            || self.feeds.filename.ends_with('/')
+            || self.feeds.filename.split('/').any(|part| part == "..")
+        {
+            bail!(
+                "{CONFIG_FILE}: feeds.filename {:?} must be a relative file name",
+                self.feeds.filename
+            );
         }
         if let Some(theme) = &self.theme
             && (theme.is_empty() || theme.contains('/') || theme.contains('\\') || theme == "..")
@@ -638,5 +678,24 @@ mod tests {
         std::fs::write(dir.join(CONFIG_FILE), MINIMAL).unwrap();
         assert_eq!(Config::load(&dir).unwrap().base_url, "https://example.org");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn directory_and_sub_paths_strip_slashes_and_reject_traversal() {
+        let custom =
+            format!("output_dir = \"public/\"\ncontent_dir = \"src/content///\"\n{MINIMAL}");
+        let config = parse(&custom).unwrap();
+        assert_eq!(config.output_dir, "public");
+        assert_eq!(config.content_dir, "src/content");
+        for bad in [
+            format!("output_dir = \"../out\"\n{MINIMAL}"),
+            format!("content_dir = \"/\"\n{MINIMAL}"),
+            format!("{MINIMAL}[feeds]\nfilename = \"/atom.xml\"\n"),
+            format!("{MINIMAL}[feeds]\nfilename = \"../atom.xml\"\n"),
+            format!("{MINIMAL}[[taxonomies]]\nname = \"tags\"\npaginate_path = \"../p\"\n"),
+            format!("{MINIMAL}[[taxonomies]]\nname = \"tags\"\ntranslations = \"../tags.toml\"\n"),
+        ] {
+            assert!(parse(&bad).is_err(), "accepted: {bad}");
+        }
     }
 }

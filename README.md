@@ -86,11 +86,11 @@ Given the same configuration file and the same source tree contents, `rssite pla
 
 Why: cache keys must be stable. Plan output is fed into content-addressed caches.
 
-### 2. Plan is cheap (or at least cached)
+### 2. Plan is amortized with single-pass mode
 
-Computing the plan may need to parse every markdown file (for front matter, tag aggregation, redirects). At scale that is slow. Two escape hatches:
+Computing the plan parses every markdown file (for front matter, tag aggregation, redirects). Two modes keep that fast:
 
-- **Internal cache**: rssite caches its own plan keyed on `hash(config) + hash(source tree)`. Re-running `plan` is fast when nothing changed.
+- **Downstream per-product caching**: build systems like rsconstruct cache each manifest entry keyed on its declared `sources`.
 - **Single-pass mode**: `rssite build --plan` produces both manifest and outputs in one invocation, amortizing the plan cost with the build.
 
 ### 3. Built outputs must match the plan
@@ -160,9 +160,11 @@ The [rsconstruct](https://github.com/veltzer/rsconstruct) build system defines a
 Wiring rssite into an rsconstruct project:
 
 ```toml
-[processor.mass_generator.site]
-command         = "rssite build"
-predict_command = "rssite plan"
+[processor.mass_generator.generic.site]
+command         = "rssite"
+args            = ["build"]
+predict_command = "rssite"
+predict_args    = ["plan"]
 output_dirs     = ["_site"]
 ```
 
@@ -170,13 +172,11 @@ rsconstruct runs `rssite plan` at graph-build time, turns each manifest entry in
 
 Other build systems (Ninja generator scripts, Bazel macros, Make meta-rules) can follow the same pattern — the manifest format is deliberately build-tool-agnostic.
 
-## Open design questions
+## Design choices
 
-- **Config format**: TOML? YAML? Something bespoke? TOML is likely, to match rsconstruct's config language.
-- **Template language**: Tera? MiniJinja? Hand-written? Tera is Rust-native and well-maintained.
-- **Markdown engine**: `pulldown-cmark` (fast, CommonMark) is the obvious choice for Rust.
-- **Should `sources` include the rssite binary itself?** Arguably yes — a different rssite version may produce different outputs. Probably handled by the downstream build tool rather than inside the manifest.
-- **Incremental plan caching**: how fine-grained? Whole-tree hash vs. per-file hashes with smart re-planning?
+- **Config format**: TOML (`rssite.toml`), matching rsconstruct's configuration language.
+- **Template language**: Tera, with non-deterministic functions (`now`, `get_random`, `get_env`) disabled.
+- **Markdown engine**: `pulldown-cmark` with `syntect` for build-time syntax highlighting and `grass` for Sass compilation.
 
 ## Prior art / what we're learning from
 
@@ -196,7 +196,7 @@ Other build systems (Ninja generator scripts, Bazel macros, Make meta-rules) can
 
 ## Contributing
 
-This is a solo design effort for now. Once the core plan/build split is implemented, contributions welcome.
+Contributions welcome. Run `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `rsconstruct build` before opening a pull request.
 
 ## License
 

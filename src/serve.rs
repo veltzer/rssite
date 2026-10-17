@@ -4,9 +4,11 @@
 
 use crate::config::Config;
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
@@ -14,33 +16,47 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("site root {}", root.display()))?;
     let config = Config::load(&root)?;
-    let output_dir = root.join(&config.output_dir);
+    let initial_output_dir = root.join(&config.output_dir);
+    let output_dir = Arc::new(RwLock::new(initial_output_dir.clone()));
     build(&root, drafts);
     let listener = TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("binding 127.0.0.1:{port}"))?;
     println!(
         "serving {} at http://127.0.0.1:{port}/",
-        output_dir.display()
+        initial_output_dir.display()
     );
     if watch {
         let root = root.clone();
-        let watched = watched_dirs(&root, &config);
+        let output_dir = Arc::clone(&output_dir);
         std::thread::spawn(move || {
-            let mut last = fingerprint(&watched, &root.join(crate::config::CONFIG_FILE));
+            let mut current_config = config;
+            let mut last = site_fingerprint(&root, &current_config);
             loop {
                 std::thread::sleep(Duration::from_millis(500));
-                let now = fingerprint(&watched, &root.join(crate::config::CONFIG_FILE));
+                if let Ok(reloaded) = Config::load(&root) {
+                    if let Ok(mut out) = output_dir.write() {
+                        *out = root.join(&reloaded.output_dir);
+                    }
+                    current_config = reloaded;
+                }
+                let now = site_fingerprint(&root, &current_config);
                 if now != last {
-                    last = now;
                     println!("change detected, rebuilding");
                     build(&root, drafts);
+                    if let Ok(reloaded) = Config::load(&root) {
+                        if let Ok(mut out) = output_dir.write() {
+                            *out = root.join(&reloaded.output_dir);
+                        }
+                        current_config = reloaded;
+                    }
+                    last = site_fingerprint(&root, &current_config);
                 }
             }
         });
     }
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let dir = output_dir.clone();
+        let dir = output_dir.read().expect("output_dir lock").clone();
         std::thread::spawn(move || {
             let _ = handle(stream, &dir);
         });
@@ -84,7 +100,44 @@ fn watched_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
     dirs
 }
 
-fn fingerprint(dirs: &[PathBuf], config_file: &Path) -> Vec<(PathBuf, Option<SystemTime>, u64)> {
+fn watched_files(root: &Path, config: &Config) -> Vec<PathBuf> {
+    let mut files = BTreeSet::new();
+    files.insert(root.join(crate::config::CONFIG_FILE));
+    for taxonomy in &config.taxonomies {
+        if let Some(translations) = &taxonomy.translations {
+            files.insert(root.join(translations));
+        }
+    }
+    let mut template_roots = vec![
+        root.join(&config.templates_dir),
+        root.join(&config.content_dir),
+    ];
+    if let Some(theme) = &config.theme {
+        template_roots.push(
+            root.join(&config.themes_dir)
+                .join(theme)
+                .join(&config.templates_dir),
+        );
+    }
+    for dir in template_roots {
+        for path in crate::util::walk_files(&dir).unwrap_or_default() {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                for data_path in crate::site::load_data_paths(&text) {
+                    files.insert(root.join(data_path));
+                }
+            }
+        }
+    }
+    files.into_iter().collect()
+}
+
+fn site_fingerprint(root: &Path, config: &Config) -> Vec<(PathBuf, Option<SystemTime>, u64)> {
+    let dirs = watched_dirs(root, config);
+    let files = watched_files(root, config);
+    fingerprint(&dirs, &files)
+}
+
+fn fingerprint(dirs: &[PathBuf], files: &[PathBuf]) -> Vec<(PathBuf, Option<SystemTime>, u64)> {
     let mut entries = Vec::new();
     let mut record = |path: PathBuf| {
         let meta = std::fs::metadata(&path).ok();
@@ -94,7 +147,9 @@ fn fingerprint(dirs: &[PathBuf], config_file: &Path) -> Vec<(PathBuf, Option<Sys
             meta.map(|m| m.len()).unwrap_or(0),
         ));
     };
-    record(config_file.to_path_buf());
+    for file in files {
+        record(file.clone());
+    }
     for dir in dirs {
         for path in crate::util::walk_files(dir).unwrap_or_default() {
             record(path);
@@ -395,18 +450,38 @@ mod tests {
         let config = dir.join("rssite.toml");
         std::fs::write(&config, "a").unwrap();
         let watched = vec![dir.join("content"), dir.join("nope")];
-        let first = fingerprint(&watched, &config);
+        let files = vec![config.clone()];
+        let first = fingerprint(&watched, &files);
         assert_eq!(first.len(), 1, "the config file alone");
         std::fs::write(dir.join("content/x.md"), "x").unwrap();
-        let second = fingerprint(&watched, &config);
+        let second = fingerprint(&watched, &files);
         assert_eq!(second.len(), 2);
         assert_ne!(first, second);
         std::fs::write(dir.join("content/x.md"), "xy").unwrap();
-        let third = fingerprint(&watched, &config);
+        let third = fingerprint(&watched, &files);
         assert_ne!(
             second, third,
             "a size change is seen even within the mtime granularity"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn watched_files_include_taxonomy_translations_and_load_data_paths() {
+        let text = "base_url = \"https://x\"\n[[languages]]\ncode = \"en\"\nname = \"E\"\n[[taxonomies]]\nname = \"tags\"\ntranslations = \"data/tags.toml\"\n";
+        let dir = std::env::temp_dir().join(format!("rssite-watched-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("templates")).unwrap();
+        std::fs::write(dir.join(crate::config::CONFIG_FILE), text).unwrap();
+        std::fs::write(
+            dir.join("templates/page.html"),
+            "{{ load_data(required=false, path=\"data/info.toml\") }}",
+        )
+        .unwrap();
+        let config = Config::load(&dir).unwrap();
+        let files = watched_files(&dir, &config);
+        let rels: Vec<String> = files.iter().map(|f| crate::util::rel(f, &dir)).collect();
+        assert_eq!(rels, ["data/info.toml", "data/tags.toml", "rssite.toml"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

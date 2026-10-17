@@ -8,6 +8,7 @@ Templates are [Tera](https://keats.github.io/tera/docs/) files under `templates/
 |---|---|
 | Root section of a language | `index.html` |
 | Any other section | `section.html`, or the section's `template` |
+| Year archive (`/en/blog/2026/`) | `archive.html`, or the section's `archive_template` |
 | Page | `page.html`, or the section's `page_template`, or the page's `template` |
 | Taxonomy list (`/en/tags/`) | `taxonomy_list.html` |
 | One term (`/en/tags/x/`) | `taxonomy_single.html` |
@@ -16,7 +17,7 @@ Templates are [Tera](https://keats.github.io/tera/docs/) files under `templates/
 | 404 pages | `404.html` (built in) |
 | Site root `/` | `root.html` if present, otherwise a redirect to the fallback language |
 
-A missing `index.html`, `section.html`, `page.html`, `taxonomy_list.html` or `taxonomy_single.html` is an error when something needs it.
+A missing `index.html`, `section.html`, `archive.html`, `page.html`, `taxonomy_list.html` or `taxonomy_single.html` is an error when something needs it.
 
 With a theme configured (see [Configuration](configuration.md)), every name is looked up in the site's `templates/` first and in the theme's second; `extends`, `include` and `import` resolve the same way, so a site template can extend a theme layout and a theme layout can include a site partial. The manifest names the file each template came from.
 
@@ -33,7 +34,7 @@ Every template gets:
 - `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.url_prefix) }}`.
 - `rssite`: the generator, `{name, version, url}`, for a "made by" line in a footer.
 
-Pages get `page` and `section` (the parent, without its page list). Sections get `section` with `pages`, `subsections` and `years` (the year archives, `{year, count, permalink, path}` newest first, empty unless `year_archives` is set), and `paginator` when paginated. A year archive gets `section` (light), `year`, `pages` (that year's, in section order) and `years`. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
+Pages get `page` and `section` (the parent, without its page list, plus `description` and `extra`). Sections get `section` with `pages`, `subsections` and `years` (the year archives, `{year, count, permalink, path}` newest first, empty unless `year_archives` is set), and `paginator` when paginated. A year archive gets `section` (light, with `description` and `extra`), `year`, `pages` (that year's, in section order) and `years`. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
 
 A page object:
 
@@ -67,7 +68,7 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 
 ## Filters
 
-- `date(format="%-d %B %Y", lang=?)`: formats a date or RFC 3339 string with strftime, taking `%B`, `%b`, `%A` and `%a` from the language's `[dates]` names. An invalid format is an error.
+- `date(format="%Y-%m-%d", lang=?)`: formats a date or RFC 3339 string with strftime, taking `%B`, `%b`, `%A` and `%a` from the language's `[dates]` names. An invalid format is an error.
 - `slugify(mode="safe")`: the site's slugifier.
 - `markdown(inline=false)`: render a string as markdown. `inline=true` unwraps a single paragraph; a string that renders to anything else (several paragraphs, a heading) is returned as it is.
 

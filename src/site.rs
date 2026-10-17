@@ -160,7 +160,16 @@ fn template_references(text: &str) -> Vec<String> {
 pub fn load_data_paths(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"load_data\(\s*path\s*=\s*"([^"]+)""#).expect("valid regex")
+        regex::Regex::new(r#"load_data\([^)]*\bpath\s*=\s*"([^"]+)""#).expect("valid regex")
+    });
+    re.captures_iter(text).map(|c| c[1].to_owned()).collect()
+}
+
+/// Literal `get_url(path = "@/...")` content paths in a template or body.
+pub fn content_url_paths(text: &str) -> Vec<String> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r##"get_url\([^)]*\bpath\s*=\s*"@/([^"#]+)"##).expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -201,11 +210,16 @@ pub struct Site {
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
 /// `blog/post.md`.
-fn strip_lang(rel: &str, lang: &str) -> String {
-    let suffix = format!(".{lang}.");
-    match rel.rfind(&suffix) {
-        Some(at) => format!("{}.{}", &rel[..at], &rel[at + suffix.len()..]),
-        None => rel.to_owned(),
+pub(crate) fn strip_lang(rel: &str, lang: &str) -> String {
+    let Some((before_ext, ext)) = rel.rsplit_once('.') else {
+        return rel.to_owned();
+    };
+    if ext.contains('/') {
+        return rel.to_owned();
+    }
+    match before_ext.strip_suffix(&format!(".{lang}")) {
+        Some(stem) if !stem.is_empty() && !stem.ends_with('/') => format!("{stem}.{ext}"),
+        _ => rel.to_owned(),
     }
 }
 
@@ -386,29 +400,47 @@ impl Site {
 
     fn build_sections(&mut self, files: &[ContentFile]) -> Result<()> {
         let codes = self.config.language_codes();
-        let mut dirs: BTreeSet<Vec<String>> = BTreeSet::new();
-        dirs.insert(Vec::new());
-        for file in files.iter().filter(|f| f.kind == FileKind::Index) {
-            dirs.insert(file.components.clone());
-        }
         // Every (directory, language) that has an index file, plus a root
         // section for every language.
+        let mut seen_sections: BTreeMap<(Vec<String>, String), String> = BTreeMap::new();
         let mut drafted: BTreeSet<(Vec<String>, String)> = BTreeSet::new();
         for file in files.iter().filter(|f| f.kind == FileKind::Index) {
+            if let Some(other) = seen_sections.insert(
+                (file.components.clone(), file.lang.clone()),
+                file.rel.clone(),
+            ) {
+                let dir = if file.components.is_empty() {
+                    "(root)".to_owned()
+                } else {
+                    file.components.join("/")
+                };
+                bail!(
+                    "content files {other} and {} are both the {:?} section index of {dir}",
+                    file.rel,
+                    file.lang
+                );
+            }
             let parsed = content::parse_section_front(file.front.clone())
                 .with_context(|| format!("content file {}", file.rel))?;
-            if parsed.front.draft && !self.drafts {
+            let ancestor_drafted = (0..=file.components.len())
+                .any(|n| drafted.contains(&(file.components[..n].to_vec(), file.lang.clone())));
+            if (parsed.front.draft && !self.drafts) || ancestor_drafted {
                 drafted.insert((file.components.clone(), file.lang.clone()));
                 continue;
             }
             let path = self.section_path(&file.lang, &file.components)?;
+            let key = parsed
+                .front
+                .translation_key
+                .clone()
+                .unwrap_or_else(|| file.components.join("/"));
             let section = Section {
                 file: Some(file.clone()),
                 front: parsed.front,
                 updated: parsed.updated,
                 lang: file.lang.clone(),
                 components: file.components.clone(),
-                key: file.components.join("/"),
+                key,
                 permalink: self.permalink(&path),
                 path,
                 pages: Vec::new(),
@@ -419,8 +451,8 @@ impl Site {
                 rendered: Rendered::default(),
                 link_sources: Vec::new(),
             };
-            let key = (file.lang.clone(), strip_lang(&file.rel, &file.lang));
-            self.section_lookup.insert(key, self.sections.len());
+            let lookup_key = (file.lang.clone(), strip_lang(&file.rel, &file.lang));
+            self.section_lookup.insert(lookup_key, self.sections.len());
             self.sections.push(section);
         }
         for code in &codes {
@@ -523,6 +555,10 @@ impl Site {
             if parsed.front.draft && !self.drafts {
                 continue;
             }
+            // A drafted section takes its pages with it.
+            if self.under_drafted_section(&file.components, &file.lang) {
+                continue;
+            }
             let Some(&section) = section_index.get(&(file.lang.clone(), file.components.clone()))
             else {
                 let dir = if file.components.is_empty() {
@@ -530,10 +566,6 @@ impl Site {
                 } else {
                     format!("{}/", file.components.join("/"))
                 };
-                // A drafted section takes its pages with it.
-                if self.section_is_drafted(&file) {
-                    continue;
-                }
                 bail!(
                     "content file {}: its directory has no section index for language {:?}; add {dir}_index.{}.md",
                     file.rel,
@@ -596,17 +628,6 @@ impl Site {
         Ok(())
     }
 
-    fn section_is_drafted(&self, file: &ContentFile) -> bool {
-        // Called only when no live section matched: the directory's index
-        // file exists but was dropped as a draft.
-        let index_name = format!("_index.{}.md", file.lang);
-        let mut dir = self.root.join(&self.config.content_dir);
-        for component in &file.components {
-            dir.push(component);
-        }
-        dir.join(index_name).is_file() && !self.drafts
-    }
-
     fn pair_translations(&mut self) -> Result<()> {
         let codes = self.config.language_codes();
         let mut groups: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
@@ -633,10 +654,19 @@ impl Site {
         }
         let mut section_groups: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
         for (i, section) in self.sections.iter().enumerate() {
-            section_groups
+            if let Some(other) = section_groups
                 .entry(section.key.clone())
                 .or_default()
-                .insert(section.lang.clone(), i);
+                .insert(section.lang.clone(), i)
+            {
+                bail!(
+                    "content files {} and {} are both the {:?} translation of section {:?}; give one a different translation_key",
+                    self.sections[other].rel().unwrap_or("_index"),
+                    section.rel().unwrap_or("_index"),
+                    section.lang,
+                    section.key
+                );
+            }
         }
         let keys: Vec<String> = self.sections.iter().map(|s| s.key.clone()).collect();
         for (i, key) in keys.iter().enumerate() {
@@ -687,7 +717,7 @@ impl Site {
             let Some(&source) = self.sections[i]
                 .translations
                 .iter()
-                .find(|&&t| self.sections[t].lang == from)
+                .find(|&&t| self.sections[t].lang == from && self.sections[t].file.is_some())
             else {
                 bail!(
                     "content file {rel}: body_from = {from:?} but this section has no {from:?} translation"
@@ -697,6 +727,13 @@ impl Site {
                 bail!(
                     "content file {rel}: body_from points at a section which itself uses body_from"
                 );
+            }
+            if self.sections[i]
+                .file
+                .as_ref()
+                .is_some_and(|f| !f.body.trim().is_empty())
+            {
+                bail!("content file {rel}: has both a body and body_from; remove one");
             }
             self.sections[i].body_source = Some(source);
         }
@@ -1136,10 +1173,19 @@ impl Site {
 
     /// Whether a section emits its own feed.
     pub fn section_feeds(&self, section: &Section) -> bool {
-        section.front.generate_feeds.unwrap_or_default()
+        if section.is_root() {
+            self.language_feeds(&section.lang)
+        } else {
+            section.front.generate_feeds.unwrap_or_default()
+        }
     }
 
     pub fn language_feeds(&self, lang: &str) -> bool {
+        if let Some(root) = self.sections.iter().find(|s| s.lang == lang && s.is_root())
+            && let Some(generate) = root.front.generate_feeds
+        {
+            return generate;
+        }
         self.config.language(lang).is_some_and(|l| l.generate_feeds)
     }
 
@@ -1151,7 +1197,26 @@ impl Site {
             .unwrap_or_default()
     }
 
-    pub fn template_sources(&self, name: &str) -> (BTreeSet<String>, bool, Vec<String>) {
+    fn text_extra_sources(&self, text: &str, lang: &str) -> Vec<String> {
+        let mut out: Vec<String> = load_data_paths(text)
+            .into_iter()
+            .filter(|p| self.root.join(p).is_file())
+            .collect();
+        for c in content_url_paths(text) {
+            if let Some((_, rel)) = self.resolve_content_path(&c, lang)
+                && !rel.is_empty()
+            {
+                out.push(format!("{}/{rel}", self.config.content_dir));
+            }
+        }
+        out
+    }
+
+    pub fn template_sources(
+        &self,
+        name: &str,
+        lang: &str,
+    ) -> (BTreeSet<String>, bool, Vec<String>) {
         let closure = self.templates.closure(name);
         let mut cross = false;
         let mut data = Vec::new();
@@ -1159,18 +1224,22 @@ impl Site {
         for template in &closure {
             let text = &self.templates.files[template];
             cross |= reads_other_pages(text);
-            data.extend(load_data_paths(text));
+            data.extend(self.text_extra_sources(text, lang));
             sources.insert(self.templates.origins[template].clone());
         }
         (sources, cross, data)
     }
 
-    pub fn body_template_sources(&self, body: &str) -> (BTreeSet<String>, bool, Vec<String>) {
+    pub fn body_template_sources(
+        &self,
+        body: &str,
+        lang: &str,
+    ) -> (BTreeSet<String>, bool, Vec<String>) {
         let mut cross = reads_other_pages(body);
-        let mut data = load_data_paths(body);
+        let mut data = self.text_extra_sources(body, lang);
         let mut sources = BTreeSet::new();
         for name in template_references(body) {
-            let (files, t_cross, t_data) = self.template_sources(&name);
+            let (files, t_cross, t_data) = self.template_sources(&name, lang);
             sources.extend(files);
             cross |= t_cross;
             data.extend(t_data);
@@ -1245,10 +1314,14 @@ mod tests {
     #[test]
     fn load_data_paths_are_the_literal_ones() {
         let found = load_data_paths(
-            "{{ load_data(path=\"out/build_info.toml\") }} {% set x = load_data( path = \"data/a.json\", required=false) %} {{ load_data(path=dynamic) }}",
+            "{{ load_data(path=\"out/build_info.toml\") }} {% set x = load_data( required=false, path = \"data/a.json\") %} {{ load_data(path=dynamic) }}",
         );
         assert_eq!(found, vec!["out/build_info.toml", "data/a.json"]);
         assert!(load_data_paths("{{ page.title }}").is_empty());
+        let urls = content_url_paths(
+            "{{ get_url(lang=\"he\", path=\"@/blog/post.md#top\") }} {{ get_url(path=\"style.css\") }}",
+        );
+        assert_eq!(urls, vec!["blog/post.md"]);
     }
 
     #[test]
@@ -1316,5 +1389,10 @@ mod tests {
         assert_eq!(strip_lang("en/notes.en.md", "en"), "en/notes.md");
         assert_eq!(strip_lang("a.en.b.en.md", "en"), "a.en.b.md");
         assert_eq!(strip_lang("x.he.md", "en"), "x.he.md");
+        assert_eq!(
+            strip_lang("dir.en.name/post.md", "en"),
+            "dir.en.name/post.md"
+        );
+        assert_eq!(strip_lang("blog/v1.en.2.md", "en"), "blog/v1.en.2.md");
     }
 }

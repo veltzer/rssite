@@ -25,7 +25,7 @@ templates/            Tera templates
 content/_index.en.md  the root section
 content/blog/         a section with one post
 sass/style.scss       compiled to style.css
-static/               copied as is (empty after init)
+static/               copied as is (when present)
 _site/                the output
 ```
 

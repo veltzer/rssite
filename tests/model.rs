@@ -1477,3 +1477,115 @@ fn year_archives_without_dated_pages_are_none() {
             .any(|p| p.starts_with("_site/en/notes/20"))
     );
 }
+
+#[test]
+fn a_language_with_root_url_prefix_builds_without_colliding() {
+    let dir = single_language_site("root-prefix");
+    edit_config(
+        &dir,
+        "name = \"English\"",
+        "name = \"English\"\nurl_prefix = \"/\"",
+    );
+    write(&dir, "templates/page.html", "page {{ page.title }}");
+    build_ok(&dir);
+    assert_eq!(read(&dir, "_site/index.html"), "root Home");
+    assert_eq!(read(&dir, "_site/blog/a/index.html"), "page A");
+    assert!(dir.join("_site/404.html").is_file());
+    assert!(dir.join("_site/atom.xml").is_file());
+}
+
+#[test]
+fn section_translation_key_root_feeds_drafts_body_from_and_duplicate_indexes_are_checked() {
+    // 1. Section translation_key pairs sections across directory names and rejects duplicates.
+    let dir = site("section-trans-key");
+    write(
+        &dir,
+        "content/notes/_index.en.md",
+        "+++\ntitle = \"Notes\"\ntranslation_key = \"shared-notes\"\n+++\n",
+    );
+    write(
+        &dir,
+        "content/רשימות/_index.he.md",
+        "+++\ntitle = \"רשימות\"\ntranslation_key = \"shared-notes\"\n+++\n",
+    );
+    build_ok(&dir);
+    assert!(
+        read(&dir, "_site/en/notes/index.html")
+            .contains("hreflang=\"he\" href=\"https://example.org/he/רשימות/\"")
+    );
+    write(
+        &dir,
+        "content/other/_index.en.md",
+        "+++\ntitle = \"Other\"\ntranslation_key = \"shared-notes\"\n+++\n",
+    );
+    let error = build_err(&dir);
+    assert!(
+        error.contains("are both the \"en\" translation of section \"shared-notes\""),
+        "{error}"
+    );
+    std::fs::remove_dir_all(dir.join("content/other")).unwrap();
+
+    // 2. Root section generate_feeds overrides language generate_feeds.
+    write(
+        &dir,
+        "content/_index.en.md",
+        "+++\ntitle = \"Home\"\ngenerate_feeds = false\n+++\n",
+    );
+    build_ok(&dir);
+    assert!(!planned_paths(&plan_of(&dir)).contains(&"_site/en/atom.xml".to_owned()));
+
+    // 3. Duplicate section index files in the same directory and language are rejected.
+    write(&dir, "content/blog/_index.en.html", "<p>dup</p>");
+    let error = build_err(&dir);
+    assert!(
+        error.contains("are both the \"en\" section index of blog"),
+        "{error}"
+    );
+    std::fs::remove_file(dir.join("content/blog/_index.en.html")).unwrap();
+
+    // 4. Drafted HTML/Tera section index and nested subsection under drafted parent drop pages.
+    write(
+        &dir,
+        "content/wip/_index.en.html",
+        "+++\ndraft = true\n+++\n<p>wip</p>",
+    );
+    write(&dir, "content/wip/p.en.md", POST);
+    write(
+        &dir,
+        "content/wip/sub/_index.en.md",
+        "+++\ntitle = \"Sub\"\n+++\n",
+    );
+    write(&dir, "content/wip/sub/q.en.md", POST);
+    build_ok(&dir);
+    assert!(!dir.join("_site/en/wip").exists());
+
+    // 5. Section body_from rejects non-empty body and implicit target root section.
+    write(
+        &dir,
+        "content/blog/_index.he.md",
+        "+++\ntitle = \"בלוג\"\nsort_by = \"date\"\nbody_from = \"en\"\n+++\n\nיש גוף.\n",
+    );
+    let error = build_err(&dir);
+    assert!(
+        error.contains("blog/_index.he.md: has both a body and body_from"),
+        "{error}"
+    );
+    write(
+        &dir,
+        "content/blog/_index.he.md",
+        "+++\ntitle = \"בלוג\"\nsort_by = \"date\"\n+++\n",
+    );
+    std::fs::remove_file(dir.join("content/_index.en.md")).unwrap();
+    write(
+        &dir,
+        "content/_index.he.md",
+        "+++\ntitle = \"בית\"\nbody_from = \"en\"\n+++\n",
+    );
+    let error = build_err(&dir);
+    assert!(
+        error.contains(
+            "_index.he.md: body_from = \"en\" but this section has no \"en\" translation"
+        ),
+        "{error}"
+    );
+}
