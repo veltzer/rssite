@@ -905,11 +905,7 @@ fn content_assets_resolve_in_markdown_and_get_url() {
         extract_probe(&read(&dir, "_site/en/blog/first/index.html")),
         "https://example.org/en/blog/pic.png|https://example.org/he/blog/data.csv"
     );
-    write(
-        &dir,
-        "templates/page.html",
-        "{{ page.content | safe }}",
-    );
+    write(&dir, "templates/page.html", "{{ page.content | safe }}");
     build_ok(&dir);
     let third = read(&dir, "_site/en/blog/third/index.html");
     assert!(
@@ -938,15 +934,16 @@ fn tera_bodies_populate_content_in_feeds_listings_and_get_page() {
         &dir,
         "{% set p = get_page(path=\"blog/dyn.tera\") %}{{ p.summary | safe }}|{{ p.content | safe }}|{{ p.word_count }}",
     );
+    edit_config(&dir, "limit = 2", "limit = 10");
     build_ok(&dir);
     assert_eq!(
         extract_probe(&read(&dir, "_site/en/blog/first/index.html")),
-        "<p>Lead paragraph</p>|<p>Lead paragraph</p><!-- more --><p>Rest of Dynamic</p>|5"
+        "<p>Lead paragraph</p>|<p>Lead paragraph</p><!-- more --><p>Rest of Dynamic</p>|6"
     );
     let feed = read(&dir, "_site/en/atom.xml");
     assert!(
-        feed.contains("Rest of Dynamic"),
-        "dated .tera page content appears in the feed:\n{feed}"
+        feed.contains("<summary type=\"html\">&lt;p&gt;Lead paragraph&lt;/p&gt;</summary>")
+            && feed.contains("Rendered as a template: this page is called About"),
+        "dated .tera page summary and content appear in the feed:\n{feed}"
     );
 }
-

@@ -97,9 +97,13 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                 context.insert("translations", &model.pages[i]["translations"]);
                 context.insert("alternates", &alternates(&model.pages[i]["translations"]));
                 let engine = engines.get_mut(lang).expect("engine per language");
-                let html = templates::render_str(engine, body, &context, what).with_context(
-                    || format!("producing {}index.html", crate::plan::strip_root(&page.path)),
-                )?;
+                let html =
+                    templates::render_str(engine, body, &context, what).with_context(|| {
+                        format!(
+                            "producing {}index.html",
+                            crate::plan::strip_root(&page.path)
+                        )
+                    })?;
                 let summary = html
                     .find(crate::markdown::SUMMARY_MARKER)
                     .map(|at| html[..at].trim_end().to_owned());
@@ -123,9 +127,8 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
             }
             for (t, taxonomy) in site.taxonomies.iter().enumerate() {
                 for (term_idx, term) in taxonomy.terms.iter().enumerate() {
-                    model.taxonomies[t]["terms"][term_idx]["pages"] = Value::Array(
-                        term.pages.iter().map(|&p| model.pages[p].clone()).collect(),
-                    );
+                    model.taxonomies[t]["terms"][term_idx]["pages"] =
+                        Value::Array(term.pages.iter().map(|&p| model.pages[p].clone()).collect());
                 }
             }
             engines = make_engines(site, &Arc::new(model.clone()))?;
@@ -146,11 +149,18 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                 let mut context = base_context_from(site, &model, lang, &section.path);
                 context.insert("section", &model.sections[s]);
                 context.insert("translations", &model.sections[s]["translations"]);
-                context.insert("alternates", &alternates(&model.sections[s]["translations"]));
+                context.insert(
+                    "alternates",
+                    &alternates(&model.sections[s]["translations"]),
+                );
                 let engine = engines.get_mut(lang).expect("engine per language");
-                let html = templates::render_str(engine, body, &context, what).with_context(
-                    || format!("producing {}index.html", crate::plan::strip_root(&section.path)),
-                )?;
+                let html =
+                    templates::render_str(engine, body, &context, what).with_context(|| {
+                        format!(
+                            "producing {}index.html",
+                            crate::plan::strip_root(&section.path)
+                        )
+                    })?;
                 let summary = html
                     .find(crate::markdown::SUMMARY_MARKER)
                     .map(|at| html[..at].trim_end().to_owned());
