@@ -242,6 +242,19 @@ impl Model {
                 "terms": terms,
             }));
         }
+        let mut asset_lookup = BTreeMap::new();
+        let language_codes = site.config.language_codes();
+        for asset in &site.assets {
+            let rel = asset.rel();
+            for lang in &language_codes {
+                if !site.under_drafted_section(&asset.components, lang)
+                    && let Ok(dir) = site.section_path(lang, &asset.components)
+                {
+                    let permalink = site.permalink(&format!("{dir}{}", asset.name));
+                    asset_lookup.insert((lang.clone(), rel.clone()), permalink);
+                }
+            }
+        }
         let mut config = serde_json::to_value(&site.config).expect("config serializes");
         config["extra"] = crate::util::toml_to_json(&toml::Value::Table(site.config.extra.clone()));
         Model {
@@ -257,13 +270,14 @@ impl Model {
             taxonomies,
             page_lookup: site.page_lookup.clone(),
             section_lookup: site.section_lookup.clone(),
+            asset_lookup,
             taxonomy_lookup,
             term_lookup,
             i18n: site.i18n.clone(),
             base_url: site.config.base_url.clone(),
             root: site.root.clone(),
             planned,
-            language_codes: site.config.language_codes(),
+            language_codes,
         }
     }
 
@@ -291,7 +305,7 @@ impl Model {
                 &self.pages[p],
             ));
         }
-        if let Some(&s) = self.section_lookup.get(&(lang, key)) {
+        if let Some(&s) = self.section_lookup.get(&(lang.clone(), key.clone())) {
             return Some((
                 self.sections[s]["permalink"]
                     .as_str()
@@ -299,6 +313,13 @@ impl Model {
                     .to_owned(),
                 &self.sections[s],
             ));
+        }
+        if let Some(permalink) = self
+            .asset_lookup
+            .get(&(lang.clone(), path.to_owned()))
+            .or_else(|| self.asset_lookup.get(&(lang, key)))
+        {
+            return Some((permalink.clone(), &Value::Null));
         }
         None
     }

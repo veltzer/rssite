@@ -76,7 +76,17 @@ fn every_output_names_its_sources() {
     let sitemap = sources_of(&plan, "_site/sitemap.xml");
     assert!(
         sitemap.contains(&"content/blog/first.he.md".to_owned())
+            && sitemap.contains(&"i18n/tags.toml".to_owned())
+            && sitemap.contains(&"i18n/en.toml".to_owned())
             && sitemap.contains(&"rssite.toml".to_owned())
+    );
+
+    let archive = sources_of(&plan, "_site/en/blog/2026/index.html");
+    assert!(
+        archive.contains(&"content/blog/first.en.md".to_owned())
+            && archive.contains(&"content/blog/first.he.md".to_owned())
+            && archive.contains(&"content/blog/_index.he.md".to_owned()),
+        "archive.html extends base.html, which reads translations/alternates: {archive:?}"
     );
 
     assert_eq!(
@@ -124,6 +134,18 @@ fn every_output_names_its_sources() {
 #[test]
 fn body_links_and_body_from_add_sources() {
     let dir = site("sources-links");
+    write(&dir, "templates/_part.html", "<p>part</p>");
+    write(&dir, "data/info.toml", "k = 1\n");
+    write(
+        &dir,
+        "content/about.en.tera",
+        "+++\ntitle = \"About\"\ntemplate = \"page.html\"\ndate = 2026-01-01\n+++\n{% include \"_part.html\" %}{{ load_data(path=\"data/info.toml\") }}{{ get_section(path=\"blog/_index.md\") }}",
+    );
+    write(
+        &dir,
+        "content/about.he.tera",
+        "+++\ntitle = \"אודות\"\ntemplate = \"page.html\"\ndate = 2026-01-01\nbody_from = \"en\"\n+++\n",
+    );
     let plan = plan_of(&dir);
     let first = sources_of(&plan, "_site/en/blog/first/index.html");
     assert!(
@@ -136,8 +158,19 @@ fn body_links_and_body_from_add_sources() {
         "body_from:\n{he_app:?}"
     );
     assert!(he_app.contains(&"templates/app.html".to_owned()));
-    let about = sources_of(&plan, "_site/en/about/index.html");
-    assert!(about.contains(&"content/about.en.tera".to_owned()));
+    let about_he = sources_of(&plan, "_site/he/about/index.html");
+    for needed in [
+        "content/about.en.tera",
+        "content/about.he.tera",
+        "templates/_part.html",
+        "data/info.toml",
+        "content/blog/first.en.md",
+    ] {
+        assert!(
+            about_he.contains(&needed.to_owned()),
+            "{needed} missing from {about_he:?}"
+        );
+    }
 }
 
 #[test]

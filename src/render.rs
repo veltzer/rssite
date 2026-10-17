@@ -28,16 +28,144 @@ struct Renderer<'a> {
     engines: BTreeMap<String, Engine>,
 }
 
-/// Render every output of `plan` into memory.
-fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
-    let model = Arc::new(Model::new(site, plan.paths()));
+fn make_engines(site: &Site, model: &Arc<Model>) -> Result<BTreeMap<String, Engine>> {
     let mut engines = BTreeMap::new();
     for code in site.config.language_codes() {
         engines.insert(
             code.clone(),
-            templates::engine(&model, &site.templates, &code)?,
+            templates::engine(model, &site.templates, &code)?,
         );
     }
+    Ok(engines)
+}
+
+fn base_context_from(site: &Site, model: &Model, lang: &str, current_path: &str) -> tera::Context {
+    let mut context = tera::Context::new();
+    context.insert("config", &model.config);
+    context.insert("lang", lang);
+    context.insert("language", &templates::language_view(site, lang));
+    context.insert("languages", &model.languages);
+    context.insert("current_path", current_path);
+    context.insert(
+        "current_url",
+        &format!("{}{}", site.config.base_url, current_path),
+    );
+    // The generator itself, for a "made by" line. A build's output is a
+    // function of its sources and the tool, and the tool's version is
+    // part of that function, so naming it is deterministic.
+    context.insert(
+        "rssite",
+        &json!({
+            "name": "rssite",
+            "version": env!("CARGO_PKG_VERSION"),
+            "url": "https://github.com/veltzer/rssite",
+        }),
+    );
+    context
+}
+
+/// Render every output of `plan` into memory.
+fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut model = Model::new(site, plan.paths());
+    let has_tera_page = (0..site.pages.len()).any(|i| {
+        site.pages[site.pages[i].body_source.unwrap_or(i)]
+            .file
+            .body_kind
+            == crate::content::BodyKind::Tera
+    });
+    let has_tera_section = (0..site.sections.len()).any(|s| {
+        site.sections[site.sections[s].body_source.unwrap_or(s)]
+            .file
+            .as_ref()
+            .is_some_and(|f| f.body_kind == crate::content::BodyKind::Tera)
+    });
+    if has_tera_page || has_tera_section {
+        let mut engines = make_engines(site, &Arc::new(model.clone()))?;
+        if has_tera_page {
+            for i in 0..site.pages.len() {
+                let source = site.pages[i].body_source.unwrap_or(i);
+                if site.pages[source].file.body_kind != crate::content::BodyKind::Tera {
+                    continue;
+                }
+                let page = &site.pages[i];
+                let lang = &page.file.lang;
+                let body = &site.pages[source].file.body;
+                let what = &page.file.rel;
+                let mut context = base_context_from(site, &model, lang, &page.path);
+                context.insert("page", &model.pages[i]);
+                context.insert("section", &light(&model.sections[page.section]));
+                context.insert("translations", &model.pages[i]["translations"]);
+                context.insert("alternates", &alternates(&model.pages[i]["translations"]));
+                let engine = engines.get_mut(lang).expect("engine per language");
+                let html = templates::render_str(engine, body, &context, what).with_context(
+                    || format!("producing {}index.html", crate::plan::strip_root(&page.path)),
+                )?;
+                let summary = html
+                    .find(crate::markdown::SUMMARY_MARKER)
+                    .map(|at| html[..at].trim_end().to_owned());
+                let words = html.split_whitespace().count();
+                model.pages[i]["content"] = Value::String(html);
+                model.pages[i]["summary"] = match summary {
+                    Some(s) => Value::String(s),
+                    None => Value::Null,
+                };
+                model.pages[i]["word_count"] = json!(words);
+                model.pages[i]["reading_time"] = json!(words.div_ceil(200).max(1));
+            }
+            for (s, section) in site.sections.iter().enumerate() {
+                model.sections[s]["pages"] = Value::Array(
+                    section
+                        .pages
+                        .iter()
+                        .map(|&p| model.pages[p].clone())
+                        .collect(),
+                );
+            }
+            for (t, taxonomy) in site.taxonomies.iter().enumerate() {
+                for (term_idx, term) in taxonomy.terms.iter().enumerate() {
+                    model.taxonomies[t]["terms"][term_idx]["pages"] = Value::Array(
+                        term.pages.iter().map(|&p| model.pages[p].clone()).collect(),
+                    );
+                }
+            }
+            engines = make_engines(site, &Arc::new(model.clone()))?;
+        }
+        if has_tera_section {
+            for s in 0..site.sections.len() {
+                let source = site.sections[s].body_source.unwrap_or(s);
+                let Some(file) = &site.sections[source].file else {
+                    continue;
+                };
+                if file.body_kind != crate::content::BodyKind::Tera {
+                    continue;
+                }
+                let section = &site.sections[s];
+                let lang = &section.lang;
+                let body = &file.body;
+                let what = section.rel().unwrap_or(&file.rel);
+                let mut context = base_context_from(site, &model, lang, &section.path);
+                context.insert("section", &model.sections[s]);
+                context.insert("translations", &model.sections[s]["translations"]);
+                context.insert("alternates", &alternates(&model.sections[s]["translations"]));
+                let engine = engines.get_mut(lang).expect("engine per language");
+                let html = templates::render_str(engine, body, &context, what).with_context(
+                    || format!("producing {}index.html", crate::plan::strip_root(&section.path)),
+                )?;
+                let summary = html
+                    .find(crate::markdown::SUMMARY_MARKER)
+                    .map(|at| html[..at].trim_end().to_owned());
+                let words = html.split_whitespace().count();
+                model.sections[s]["content"] = Value::String(html);
+                model.sections[s]["summary"] = match summary {
+                    Some(s) => Value::String(s),
+                    None => Value::Null,
+                };
+                model.sections[s]["word_count"] = json!(words);
+            }
+        }
+    }
+    let model = Arc::new(model);
+    let engines = make_engines(site, &model)?;
     let mut renderer = Renderer {
         site,
         model,
@@ -199,28 +327,7 @@ impl Renderer<'_> {
     }
 
     fn base_context(&self, lang: &str, current_path: &str) -> tera::Context {
-        let mut context = tera::Context::new();
-        context.insert("config", &self.model.config);
-        context.insert("lang", lang);
-        context.insert("language", &templates::language_view(self.site, lang));
-        context.insert("languages", &self.model.languages);
-        context.insert("current_path", current_path);
-        context.insert(
-            "current_url",
-            &format!("{}{}", self.site.config.base_url, current_path),
-        );
-        // The generator itself, for a "made by" line. A build's output is a
-        // function of its sources and the tool, and the tool's version is
-        // part of that function, so naming it is deterministic.
-        context.insert(
-            "rssite",
-            &json!({
-                "name": "rssite",
-                "version": env!("CARGO_PKG_VERSION"),
-                "url": "https://github.com/veltzer/rssite",
-            }),
-        );
-        context
+        base_context_from(self.site, &self.model, lang, current_path)
     }
 
     fn render(&mut self, output: &Output) -> Result<Vec<u8>> {
@@ -356,20 +463,12 @@ impl Renderer<'_> {
         let page = &self.site.pages[i];
         let lang = page.file.lang.clone();
         let template = self.site.page_template(page);
-        let mut view = self.model.pages[i].clone();
+        let view = &self.model.pages[i];
         let mut context = self.base_context(&lang, &page.path);
-        let source = page.body_source.unwrap_or(i);
-        if self.site.pages[source].file.body_kind == crate::content::BodyKind::Tera {
-            let body = self.site.pages[source].file.body.clone();
-            let what = page.file.rel.clone();
-            context.insert("page", &view);
-            let html = templates::render_str(self.engine(&lang), &body, &context, &what)?;
-            view["content"] = Value::String(html);
-        }
         // Only the light view: the full section carries every page of the
         // section, and cloning that once per page is quadratic.
         let section = light(&self.model.sections[page.section]);
-        context.insert("page", &view);
+        context.insert("page", view);
         context.insert("section", &section);
         context.insert("translations", &view["translations"]);
         context.insert("alternates", &alternates(&view["translations"]));
@@ -380,22 +479,12 @@ impl Renderer<'_> {
         let section = &self.site.sections[s];
         let lang = section.lang.clone();
         let template = self.site.section_template(section);
-        let mut view = self.model.sections[s].clone();
+        let view = &self.model.sections[s];
         let current_path = match pager {
             Some(n) if n > 1 => format!("{}{}/{n}/", section.path, section.front.paginate_path),
             _ => section.path.clone(),
         };
         let mut context = self.base_context(&lang, &current_path);
-        let source = section.body_source.unwrap_or(s);
-        if let Some(file) = &self.site.sections[source].file
-            && file.body_kind == crate::content::BodyKind::Tera
-        {
-            let body = file.body.clone();
-            let what = file.rel.clone();
-            context.insert("section", &view);
-            let html = templates::render_str(self.engine(&lang), &body, &context, &what)?;
-            view["content"] = Value::String(html);
-        }
         if let Some(n) = pager {
             let paginator = paginator_view(
                 &view["pages"],
@@ -406,7 +495,7 @@ impl Renderer<'_> {
             );
             context.insert("paginator", &paginator);
         }
-        context.insert("section", &view);
+        context.insert("section", view);
         context.insert("translations", &view["translations"]);
         context.insert("alternates", &alternates(&view["translations"]));
         templates::render(self.engine(&lang), &template, &context)

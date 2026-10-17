@@ -138,8 +138,14 @@ impl Plan {
             if let Some(file) = &site.sections[page.section].file {
                 sources.insert(site.rel(&file.path));
             }
-            if page.file.body_kind == crate::content::BodyKind::Tera {
-                sources.extend(crate::site::load_data_paths(&page.file.body));
+            let body_file = &site.pages[page.body_source.unwrap_or(i)].file;
+            if body_file.body_kind == crate::content::BodyKind::Tera {
+                let (files, cross, data) = site.body_template_sources(&body_file.body);
+                sources.extend(files);
+                sources.extend(data);
+                if cross {
+                    sources.extend(all_content.iter().cloned());
+                }
             }
             let sources = with_template(sources, &site.page_template(page), &page.file.lang);
             outputs.push(Output {
@@ -164,16 +170,26 @@ impl Plan {
         // Sections, their pagers, feeds and aliases.
         for (i, section) in site.sections.iter().enumerate() {
             let mut sources = content_of_lang(&section.lang);
+            for &t in &section.translations {
+                if let Some(file) = &site.sections[t].file {
+                    sources.insert(site.rel(&file.path));
+                }
+            }
             if let Some(source) = section.body_source
                 && let Some(file) = &site.sections[source].file
             {
                 sources.insert(site.rel(&file.path));
             }
             sources.extend(section.link_sources.iter().cloned());
-            if let Some(file) = &section.file
-                && file.body_kind == crate::content::BodyKind::Tera
+            if let Some(body_file) = &site.sections[section.body_source.unwrap_or(i)].file
+                && body_file.body_kind == crate::content::BodyKind::Tera
             {
-                sources.extend(crate::site::load_data_paths(&file.body));
+                let (files, cross, data) = site.body_template_sources(&body_file.body);
+                sources.extend(files);
+                sources.extend(data);
+                if cross {
+                    sources.extend(all_content.iter().cloned());
+                }
             }
             let sources = with_template(sources, &site.section_template(section), &section.lang);
             let pagers = pager_count(section.pages.len(), section.front.paginate_by);
@@ -207,12 +223,18 @@ impl Plan {
             if section.front.year_archives {
                 // A year's listing depends on every content file of the
                 // language, like the section listing: any post can move
-                // between years or be added.
-                let archive_sources = with_template(
-                    content_of_lang(&section.lang),
-                    &site.archive_template(section),
-                    &section.lang,
-                );
+                // between years or be added. When the archive template
+                // reads `translations` or `alternates`, it also depends on
+                // the translated sections and their languages' content.
+                let archive_template = site.archive_template(section);
+                let mut archive_content = content_of_lang(&section.lang);
+                if site.template_reads_translations(&archive_template) {
+                    for &t in &section.translations {
+                        archive_content.extend(content_of_lang(&site.sections[t].lang));
+                    }
+                }
+                let archive_sources =
+                    with_template(archive_content, &archive_template, &section.lang);
                 for (year, _) in site.years_of(section) {
                     outputs.push(Output {
                         path: format!("{base}{year}/index.html"),
@@ -341,9 +363,12 @@ impl Plan {
         // Site-wide files.
         if site.config.sitemap.enabled {
             let mut sources = all_content.clone();
-            sources.insert(config_file.clone());
-            let (files, _, _) = site.template_sources("sitemap.xml");
-            sources.extend(files);
+            for taxonomy in &site.taxonomies {
+                if let Some(file) = &taxonomy.translations_file {
+                    sources.insert(file.clone());
+                }
+            }
+            let sources = with_template(sources, "sitemap.xml", &fallback);
             outputs.push(Output {
                 path: "sitemap.xml".to_owned(),
                 sources,

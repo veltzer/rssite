@@ -886,3 +886,67 @@ fn template_includes_and_macros_work_and_are_tracked() {
         );
     }
 }
+
+#[test]
+fn content_assets_resolve_in_markdown_and_get_url() {
+    let dir = site("asset-links");
+    write(&dir, "content/blog/pic.png", "png");
+    write(
+        &dir,
+        "content/blog/third.en.md",
+        "+++\ntitle = \"Third post\"\ndate = 2026-03-15\n+++\n\n![alt](@/blog/pic.png) and [csv](@/blog/data.csv)\n",
+    );
+    write_probe(
+        &dir,
+        "{{ get_url(path=\"@/blog/pic.png\") }}|{{ get_url(path=\"@/blog/data.csv\", lang=\"he\") }}",
+    );
+    build_ok(&dir);
+    assert_eq!(
+        extract_probe(&read(&dir, "_site/en/blog/first/index.html")),
+        "https://example.org/en/blog/pic.png|https://example.org/he/blog/data.csv"
+    );
+    write(
+        &dir,
+        "templates/page.html",
+        "{{ page.content | safe }}",
+    );
+    build_ok(&dir);
+    let third = read(&dir, "_site/en/blog/third/index.html");
+    assert!(
+        third.contains("src=\"https://example.org/en/blog/pic.png\"")
+            && third.contains("href=\"https://example.org/en/blog/data.csv\""),
+        "{third}"
+    );
+    let plan = plan_of(&dir);
+    let sources = sources_of(&plan, "_site/en/blog/third/index.html");
+    assert!(
+        sources.contains(&"content/blog/pic.png".to_owned())
+            && sources.contains(&"content/blog/data.csv".to_owned()),
+        "{sources:?}"
+    );
+}
+
+#[test]
+fn tera_bodies_populate_content_in_feeds_listings_and_get_page() {
+    let dir = site("tera-everywhere");
+    write(
+        &dir,
+        "content/blog/dyn.en.tera",
+        "+++\ntitle = \"Dynamic\"\ndate = 2026-06-01\n+++\n<p>Lead paragraph</p><!-- more --><p>Rest of {{ page.title }}</p>",
+    );
+    write_probe(
+        &dir,
+        "{% set p = get_page(path=\"blog/dyn.tera\") %}{{ p.summary | safe }}|{{ p.content | safe }}|{{ p.word_count }}",
+    );
+    build_ok(&dir);
+    assert_eq!(
+        extract_probe(&read(&dir, "_site/en/blog/first/index.html")),
+        "<p>Lead paragraph</p>|<p>Lead paragraph</p><!-- more --><p>Rest of Dynamic</p>|5"
+    );
+    let feed = read(&dir, "_site/en/atom.xml");
+    assert!(
+        feed.contains("Rest of Dynamic"),
+        "dated .tera page content appears in the feed:\n{feed}"
+    );
+}
+
