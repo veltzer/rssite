@@ -210,6 +210,8 @@ pub struct Site {
     pub drafted_sections: BTreeSet<(Vec<String>, String)>,
     /// The commit the site root is checked out at, when it is in git.
     pub git: Option<crate::git::GitInfo>,
+    /// When this build ran, the same for every page it writes.
+    pub build: crate::build_info::BuildInfo,
 }
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
@@ -297,6 +299,7 @@ impl Site {
             section_lookup: BTreeMap::new(),
             drafted_sections: BTreeSet::new(),
             git: None,
+            build: crate::build_info::BuildInfo::now(),
         };
         site.content_files = files
             .iter()

@@ -1,6 +1,7 @@
 //! rssite: a static site generator that can say what it will write before
 //! it writes it. See README.md for the contract and docs/ for the rest.
 
+mod build_info;
 mod builtin;
 mod config;
 mod content;

@@ -55,6 +55,8 @@ fn base_context_from(site: &Site, model: &Model, lang: &str, current_path: &str)
     // part of that function, so naming it is deterministic.
     // The commit the site is built from, null outside git.
     context.insert("git", &site.git);
+    // When the build ran: the one value no source determines.
+    context.insert("build", &site.build);
     // What the document says about itself in <meta name="description">;
     // pages and sections replace this language-wide default.
     context.insert(
