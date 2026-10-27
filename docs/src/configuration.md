@@ -35,6 +35,9 @@ title = "My site"          # optional, defaults to the top-level title
 description = "..."        # optional
 generate_feeds = true      # default true: /en/atom.xml
 url_prefix = "/en/"        # default "/<code>/"
+locale = "en_US"           # optional; templates get it as language.locale
+date_format = "%-d %b %Y"  # the date filter's default; "%Y-%m-%d" if unset
+date_format_long = "%-d %B %Y"  # with date(long=true); date_format if unset
 
 [[languages]]
 code = "he"
@@ -47,6 +50,7 @@ paginate_by = 20           # optional
 paginate_path = "page"     # default
 feed = true                # a feed per term; default false
 translations = "i18n/tags.toml"   # optional, see below
+# infer_translations = true       # or pair terms through the pages, see below
 
 [slugify]
 paths = "safe"             # "safe" keeps Unicode letters; "ascii" transliterates
@@ -61,9 +65,24 @@ highlight_theme = "InspiredGitHub"
 [feeds]
 limit = 20                 # newest entries per feed
 filename = "atom.xml"
+root = false               # also write the fallback language's feed at /atom.xml
 
 [sitemap]
 enabled = true
+
+[search]
+enabled = false            # a JSON index per language at <prefix>search.json
+filename = "search.json"
+content = false            # include each page's text
+
+[related]
+limit = 5                  # page.related: pages sharing the most terms; 0 for none
+taxonomies = []            # which taxonomies count; all of them by default
+
+# Retired URLs, each a redirect page. Optional, repeatable.
+[[redirects]]
+from = "/2019/05/01/old-title/"
+to = "@/blog/post.md"              # or a site path "/en/blog/", or a URL
 
 [extra]
 # Anything; templates read it as config.extra.
@@ -128,6 +147,26 @@ he = "לינוקס"
 ```
 
 A paired term's page gets `translations` and `alternates` like a page does, so the language switcher and the `hreflang` links reach the same tag in the other language. A row naming a term that no page uses yet is fine; a row naming a language that is not configured is an error.
+
+When a page and its translation always list the same terms in the same order, the table can be left to rssite: `infer_translations = true` pairs the Nth term of a page with the Nth term of each of its translations. Pairs chain across pages, so a term used on many posts gets one row. Two lists of different length, or a term paired with two different terms of one language (some page lists them in another order), is an error naming the pages. A taxonomy takes `translations` or `infer_translations`, not both. Inferred pairings read every language's pages, so the term pages list every content file as a source.
+
+## Redirects
+
+A `[[redirects]]` entry writes a redirect page at `from`, a site path written like a page alias: `/old/` and `old` are `old/index.html`, `/keys/public.asc` is that file. `to` is one of:
+
+- `@/blog/post.md`: a content file, in the fallback language unless the name carries a suffix (`@/blog/post.he.md`), with an optional `#fragment`. The file becomes a source of the redirect, and one that does not exist fails the build.
+- `/en/blog/`: a site path, which must be something the build writes. A redirect to a page that was since renamed fails the build instead of sending readers to a 404.
+- `https://...`: an absolute URL, taken as it is.
+
+A redirect written over a file the build already produces is an error, like any two outputs at one path. For a page's own old URLs, `aliases` in its front matter does the same job; `[[redirects]]` is for what is not a page: a section that moved, a file that is gone, an address from an older site. A section's old pager URLs are `pager_aliases` (see [Content](content.md)).
+
+## Feeds, search and robots.txt
+
+`feeds.root = true` writes the fallback language's feed a second time at the site root, for readers who subscribed before the site had languages. The copy is byte for byte the language's feed, self link included, so a reader that follows the self link moves to the language's URL.
+
+`search.enabled = true` writes `<language prefix><filename>` for every language: `{"lang": "en", "pages": [...]}`, newest first, each page with `title`, `permalink`, `path`, `date`, `section`, `description` (the meta description, see [Templates](templates.md)) and `taxonomies` (a map of taxonomy name to term names). `content = true` adds each page's text, which makes the index about as large as the site's text.
+
+Without a `robots.txt` in `static/`, rssite writes one allowing everything and naming the sitemap; with the sitemap disabled it names none.
 
 ## Slugs
 

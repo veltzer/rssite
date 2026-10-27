@@ -27,6 +27,7 @@ pub enum Kind {
         year: i32,
     },
     LanguageFeed(String),
+    SearchIndex(String),
     SectionFeed(usize),
     TermFeed {
         taxonomy: usize,
@@ -222,6 +223,34 @@ impl Plan {
                     });
                 }
             }
+            if let Some(pattern) = &section.front.pager_aliases {
+                let rel = section.rel().unwrap_or("(root)");
+                if !pattern.contains("{n}") {
+                    bail!("section {rel}: pager_aliases = {pattern:?} has no {{n}}");
+                }
+                let Some(pagers) = pagers else {
+                    bail!("section {rel}: pager_aliases needs paginate_by");
+                };
+                let mut alias_sources = BTreeSet::new();
+                if let Some(file) = &section.file {
+                    alias_sources.insert(site.rel(&file.path));
+                }
+                // The pager count depends on how many pages the section has.
+                alias_sources.extend(content_of_lang(&section.lang));
+                alias_sources.insert(config_file.clone());
+                for n in 1..=pagers {
+                    let target = if n == 1 {
+                        section.permalink.clone()
+                    } else {
+                        format!("{}{}/{n}/", section.permalink, section.front.paginate_path)
+                    };
+                    outputs.push(Output {
+                        path: alias_path(&pattern.replace("{n}", &n.to_string())),
+                        sources: alias_sources.clone(),
+                        kind: Kind::Alias { target },
+                    });
+                }
+            }
             if section.front.year_archives {
                 // A year's listing depends on every content file of the
                 // language, like the section listing: any post can move
@@ -275,14 +304,44 @@ impl Plan {
             let lang = &language.code;
             if site.language_feeds(lang) {
                 let sources = with_template(content_of_lang(lang), "atom.xml", lang);
+                let path = format!(
+                    "{}{}",
+                    strip_root(language.prefix()),
+                    site.config.feeds.filename
+                );
+                // The fallback language's feed, again at the site root.
+                if site.config.feeds.root
+                    && *lang == site.config.fallback()
+                    && path != site.config.feeds.filename
+                {
+                    outputs.push(Output {
+                        path: site.config.feeds.filename.clone(),
+                        sources: sources.clone(),
+                        kind: Kind::LanguageFeed(lang.clone()),
+                    });
+                }
+                outputs.push(Output {
+                    path,
+                    sources,
+                    kind: Kind::LanguageFeed(lang.clone()),
+                });
+            } else if site.config.feeds.root && *lang == site.config.fallback() {
+                bail!(
+                    "{}: feeds.root is set but the fallback language {lang:?} has no feed",
+                    crate::config::CONFIG_FILE
+                );
+            }
+            if site.config.search.enabled {
+                let mut sources = content_of_lang(lang);
+                sources.insert(config_file.clone());
                 outputs.push(Output {
                     path: format!(
                         "{}{}",
                         strip_root(language.prefix()),
-                        site.config.feeds.filename
+                        site.config.search.filename
                     ),
                     sources,
-                    kind: Kind::LanguageFeed(lang.clone()),
+                    kind: Kind::SearchIndex(lang.clone()),
                 });
             }
             let sources = with_template(BTreeSet::new(), "404.html", lang);
@@ -312,6 +371,15 @@ impl Plan {
             let mut sources = sources;
             if let Some(file) = &taxonomy.translations_file {
                 sources.insert(file.clone());
+            }
+            // Inferred pairings come from the pages of every language.
+            if site
+                .config
+                .taxonomies
+                .iter()
+                .any(|c| c.name == taxonomy.name && c.infer_translations)
+            {
+                sources.extend(all_content.iter().cloned());
             }
             outputs.push(Output {
                 path: format!("{}index.html", strip_root(&taxonomy.path)),
@@ -363,6 +431,46 @@ impl Plan {
                     });
                 }
             }
+        }
+
+        // Redirects declared in the configuration. A site-path target is
+        // checked against the plan below, once every output is known.
+        let mut local_targets: Vec<(String, String)> = Vec::new();
+        for redirect in &site.config.redirects {
+            let mut sources = BTreeSet::new();
+            sources.insert(config_file.clone());
+            let target = if let Some(content) = redirect.to.strip_prefix("@/") {
+                let (content_path, fragment) = match content.split_once('#') {
+                    Some((p, f)) => (p, Some(f)),
+                    None => (content, None),
+                };
+                let Some((permalink, rel)) = site.resolve_content_path(content_path, &fallback)
+                else {
+                    bail!(
+                        "{}: [[redirects]] from = {:?}: no content file matches {:?}",
+                        crate::config::CONFIG_FILE,
+                        redirect.from,
+                        redirect.to
+                    );
+                };
+                if !rel.is_empty() {
+                    sources.insert(format!("{}/{rel}", site.config.content_dir));
+                }
+                match fragment {
+                    Some(f) => format!("{permalink}#{f}"),
+                    None => permalink,
+                }
+            } else if redirect.to.starts_with('/') {
+                local_targets.push((redirect.from.clone(), redirect.to.clone()));
+                site.permalink(&redirect.to)
+            } else {
+                redirect.to.clone()
+            };
+            outputs.push(Output {
+                path: alias_path(&redirect.from),
+                sources,
+                kind: Kind::Alias { target },
+            });
         }
 
         // Site-wide files.
@@ -478,6 +586,21 @@ impl Plan {
         }
 
         outputs.sort_by(|a, b| a.path.cmp(&b.path));
+        for (from, to) in &local_targets {
+            let path = to.split(['#', '?']).next().unwrap_or(to);
+            let file = if path.ends_with('/') {
+                format!("{}index.html", strip_root(path))
+            } else {
+                strip_root(path)
+            };
+            let found = |p: &str| outputs.binary_search_by(|o| o.path.as_str().cmp(p)).is_ok();
+            if !found(&file) && !found(&format!("{file}/index.html")) {
+                bail!(
+                    "{}: [[redirects]] from = {from:?} points at {to:?}, which this build does not write",
+                    crate::config::CONFIG_FILE
+                );
+            }
+        }
         for pair in outputs.windows(2) {
             if pair[0].path == pair[1].path {
                 bail!(
@@ -555,6 +678,7 @@ fn describe(site: &Site, kind: &Kind) -> String {
             site.sections[*section].rel().unwrap_or("(root)")
         ),
         Kind::LanguageFeed(l) => format!("the {l} feed"),
+        Kind::SearchIndex(l) => format!("the {l} search index"),
         Kind::SectionFeed(s) => format!(
             "the feed of section {}",
             site.sections[*s].rel().unwrap_or("(root)")

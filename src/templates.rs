@@ -52,24 +52,127 @@ fn light_section(section: &Section) -> Value {
     })
 }
 
-fn translations_view(site: &Site, indexes: &[usize]) -> Vec<Value> {
+fn translations_view(site: &Site, indexes: &[usize], lang: &str) -> Vec<Value> {
     indexes
         .iter()
         .map(|&t| {
             let page = &site.pages[t];
-            json!({"lang": page.file.lang, "permalink": page.permalink, "path": page.path, "title": page.front.title})
+            json!({"lang": page.file.lang, "permalink": page.permalink, "path": page.path, "title": page.front.title, "current": page.file.lang == lang})
         })
         .collect()
 }
 
-fn section_translations_view(site: &Site, indexes: &[usize]) -> Vec<Value> {
+fn section_translations_view(site: &Site, indexes: &[usize], lang: &str) -> Vec<Value> {
     indexes
         .iter()
         .map(|&t| {
             let section = &site.sections[t];
-            json!({"lang": section.lang, "permalink": section.permalink, "path": section.path, "title": section.title()})
+            json!({"lang": section.lang, "permalink": section.permalink, "path": section.path, "title": section.title(), "current": section.lang == lang})
         })
         .collect()
+}
+
+/// The language's description, or the site's.
+fn language_description(site: &Site, lang: &str) -> String {
+    site.config
+        .language(lang)
+        .and_then(|l| l.description.clone())
+        .unwrap_or_else(|| site.config.description.clone())
+}
+
+/// What `<meta name="description">` says about a page: its description,
+/// else the start of its summary or text, else the language's description.
+pub fn page_meta_description(site: &Site, page: &Page) -> String {
+    if let Some(description) = page
+        .front
+        .description
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+    {
+        return description.to_owned();
+    }
+    let source = page
+        .rendered
+        .summary
+        .as_deref()
+        .unwrap_or(&page.rendered.html);
+    let text = crate::util::html_to_text(source);
+    if text.is_empty() {
+        language_description(site, &page.file.lang)
+    } else {
+        crate::util::truncate_words(&text, 160)
+    }
+}
+
+/// Schema.org JSON-LD for a page, as a string ready for a
+/// `<script type="application/ld+json">`: a `BlogPosting` for a dated page,
+/// a `WebPage` otherwise, with its translations as `workTranslation`.
+pub fn page_json_ld(site: &Site, i: usize, meta_description: &Value) -> String {
+    let page = &site.pages[i];
+    let lang = &page.file.lang;
+    let language = site.config.language(lang).expect("configured language");
+    let dated = page.date.is_some();
+    let mut value = json!({
+        "@context": "https://schema.org",
+        "@type": if dated { "BlogPosting" } else { "WebPage" },
+        "headline": page.front.title,
+        "name": page.front.title,
+        "description": meta_description,
+        "url": page.permalink,
+        "mainEntityOfPage": page.permalink,
+        "inLanguage": lang,
+        "isPartOf": {
+            "@type": "WebSite",
+            "name": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
+            "url": site.permalink(language.prefix()),
+        },
+    });
+    if !site.config.author.is_empty() {
+        value["author"] = json!({"@type": "Person", "name": site.config.author});
+    }
+    if let Some(date) = &page.date {
+        value["datePublished"] = json!(date.rfc3339());
+        value["dateModified"] = json!(page.updated.as_ref().unwrap_or(date).rfc3339());
+        value["wordCount"] = json!(page.rendered.word_count);
+    }
+    let keywords: Vec<&str> = page
+        .front
+        .taxonomies
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    if !keywords.is_empty() {
+        value["keywords"] = json!(keywords.join(", "));
+    }
+    let others: Vec<Value> = page
+        .translations
+        .iter()
+        .filter(|&&t| t != i)
+        .map(|&t| {
+            json!({
+                "@type": if dated { "BlogPosting" } else { "WebPage" },
+                "url": site.pages[t].permalink,
+                "inLanguage": site.pages[t].file.lang,
+            })
+        })
+        .collect();
+    if !others.is_empty() {
+        value["workTranslation"] = Value::Array(others);
+    }
+    // `</script>` inside a string would end the element early.
+    serde_json::to_string_pretty(&value)
+        .expect("JSON-LD serializes")
+        .replace('<', "\\u003c")
+}
+
+pub fn section_meta_description(site: &Site, section: &Section) -> String {
+    section
+        .front
+        .description
+        .clone()
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| language_description(site, &section.lang))
 }
 
 pub fn page_view(site: &Site, i: usize) -> Value {
@@ -122,7 +225,9 @@ pub fn page_view(site: &Site, i: usize) -> Value {
         "taxonomies": taxonomies,
         "extra": crate::util::toml_to_json(&toml::Value::Table(page.front.extra.clone())),
         "lang": page.file.lang,
-        "translations": translations_view(site, &page.translations),
+        "translations": translations_view(site, &page.translations, &page.file.lang),
+        "meta_description": page_meta_description(site, page),
+        "related": page.related.iter().map(|&p| light_page(&site.pages[p])).collect::<Vec<_>>(),
         "previous": page.previous.map(|p| light_page(&site.pages[p])),
         "next": page.next.map(|p| light_page(&site.pages[p])),
         "draft": page.front.draft,
@@ -151,7 +256,8 @@ pub fn section_view(site: &Site, i: usize, pages: &[Value]) -> Value {
         "page_count": section.pages.len(),
         "subsections": section.subsections.iter().map(|&s| light_section(&site.sections[s])).collect::<Vec<_>>(),
         "parent": section.parent.map(|p| light_section(&site.sections[p])),
-        "translations": section_translations_view(site, &section.translations),
+        "translations": section_translations_view(site, &section.translations, &section.lang),
+        "meta_description": section_meta_description(site, section),
         "components": section.components,
         "relative_path": section.rel(),
         "updated": section.updated.as_ref().map(|d| d.ymd()),
@@ -192,6 +298,10 @@ pub fn language_view(site: &Site, code: &str) -> Value {
         "title": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
         "description": language.description.clone().unwrap_or_else(|| site.config.description.clone()),
         "generate_feeds": site.language_feeds(code),
+        "locale": language.locale,
+        "date_format": language.date_format.clone().unwrap_or_else(|| "%Y-%m-%d".to_owned()),
+        "date_format_long": language.date_format_long.clone().or_else(|| language.date_format.clone()).unwrap_or_else(|| "%Y-%m-%d".to_owned()),
+        "is_fallback": site.config.fallback() == code,
     })
 }
 
@@ -585,9 +695,24 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
                     Value::Null => return Err(err("date filter: the value is null".to_owned())),
                     other => other.to_string(),
                 };
-                let format =
-                    arg_string(args, "format", "date")?.unwrap_or_else(|| "%Y-%m-%d".to_owned());
                 let lang = lang_arg(args, "date", &lang, &model)?;
+                let long = arg_bool(args, "long", "date", false)?;
+                let format = match arg_string(args, "format", "date")? {
+                    Some(format) => format,
+                    None => {
+                        let language = model
+                            .languages
+                            .iter()
+                            .find(|l| l["code"] == lang.as_str())
+                            .ok_or_else(|| err(format!("no language {lang}")))?;
+                        let key = if long {
+                            "date_format_long"
+                        } else {
+                            "date_format"
+                        };
+                        language[key].as_str().unwrap_or("%Y-%m-%d").to_owned()
+                    }
+                };
                 let names = &model
                     .i18n
                     .get(&lang)

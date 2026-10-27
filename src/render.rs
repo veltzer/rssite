@@ -53,6 +53,14 @@ fn base_context_from(site: &Site, model: &Model, lang: &str, current_path: &str)
     // The generator itself, for a "made by" line. A build's output is a
     // function of its sources and the tool, and the tool's version is
     // part of that function, so naming it is deterministic.
+    // The commit the site is built from, null outside git.
+    context.insert("git", &site.git);
+    // What the document says about itself in <meta name="description">;
+    // pages and sections replace this language-wide default.
+    context.insert(
+        "meta_description",
+        &templates::language_view(site, lang)["description"],
+    );
     context.insert(
         "rssite",
         &json!({
@@ -94,8 +102,8 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                 let mut context = base_context_from(site, &model, lang, &page.path);
                 context.insert("page", &model.pages[i]);
                 context.insert("section", &light(&model.sections[page.section]));
-                context.insert("translations", &model.pages[i]["translations"]);
-                context.insert("alternates", &alternates(&model.pages[i]["translations"]));
+                context.insert("meta_description", &model.pages[i]["meta_description"]);
+                insert_translations(&mut context, &model.pages[i]["translations"], site);
                 let engine = engines.get_mut(lang).expect("engine per language");
                 let html =
                     templates::render_str(engine, body, &context, what).with_context(|| {
@@ -115,6 +123,20 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                 };
                 model.pages[i]["word_count"] = json!(words);
                 model.pages[i]["reading_time"] = json!(words.div_ceil(200).max(1));
+                // The body only exists now, so the description derived from
+                // it does too.
+                if page.front.description.is_none() {
+                    let text = crate::util::html_to_text(
+                        model.pages[i]["summary"]
+                            .as_str()
+                            .or(model.pages[i]["content"].as_str())
+                            .unwrap_or_default(),
+                    );
+                    if !text.is_empty() {
+                        model.pages[i]["meta_description"] =
+                            Value::String(crate::util::truncate_words(&text, 160));
+                    }
+                }
             }
             for (s, section) in site.sections.iter().enumerate() {
                 model.sections[s]["pages"] = Value::Array(
@@ -148,11 +170,8 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                 let what = section.rel().unwrap_or(&file.rel);
                 let mut context = base_context_from(site, &model, lang, &section.path);
                 context.insert("section", &model.sections[s]);
-                context.insert("translations", &model.sections[s]["translations"]);
-                context.insert(
-                    "alternates",
-                    &alternates(&model.sections[s]["translations"]),
-                );
+                context.insert("meta_description", &model.sections[s]["meta_description"]);
+                insert_translations(&mut context, &model.sections[s]["translations"], site);
                 let engine = engines.get_mut(lang).expect("engine per language");
                 let html =
                     templates::render_str(engine, body, &context, what).with_context(|| {
@@ -371,7 +390,22 @@ impl Renderer<'_> {
                     .language(&lang)
                     .and_then(|l| l.title.clone())
                     .unwrap_or_else(|| self.site.config.title.clone());
-                self.render_feed(&lang, pages, &output.path, &alternate, &title, None)?
+                // The language's own feed path, also for the copy at the site
+                // root (feeds.root): the two are the same feed, byte for
+                // byte, and a reader following its self link moves to the
+                // language's URL.
+                let path = format!(
+                    "{}{}",
+                    crate::plan::strip_root(
+                        self.site
+                            .config
+                            .language(&lang)
+                            .map(|l| l.prefix())
+                            .unwrap_or("/")
+                    ),
+                    self.site.config.feeds.filename
+                );
+                self.render_feed(&lang, pages, &path, &alternate, &title, None)?
                     .into_bytes()
             }
             Kind::SectionFeed(s) => {
@@ -410,17 +444,22 @@ impl Renderer<'_> {
                 .into_bytes()
             }
             Kind::Sitemap => self.render_sitemap()?.into_bytes(),
-            Kind::Robots => format!(
-                "User-agent: *\nAllow: /\n\nSitemap: {}/sitemap.xml\n",
-                self.site.config.base_url
-            )
-            .into_bytes(),
+            Kind::SearchIndex(lang) => self.render_search_index(lang)?.into_bytes(),
+            Kind::Robots => {
+                let mut robots = "User-agent: *\nAllow: /\n".to_owned();
+                if self.site.config.sitemap.enabled {
+                    robots.push_str(&format!(
+                        "\nSitemap: {}/sitemap.xml\n",
+                        self.site.config.base_url
+                    ));
+                }
+                robots.into_bytes()
+            }
             Kind::Root => {
                 let fallback = self.site.config.fallback().to_owned();
                 if self.site.templates.has("root.html") {
                     let mut context = self.base_context(&fallback, "/");
-                    context.insert("translations", &Vec::<Value>::new());
-                    context.insert("alternates", &Value::Object(serde_json::Map::new()));
+                    insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
                     templates::render(self.engine(&fallback), "root.html", &context)?.into_bytes()
                 } else {
                     let prefix = self
@@ -442,8 +481,7 @@ impl Renderer<'_> {
                     .map(|l| l.prefix().to_owned())
                     .unwrap_or_default();
                 let mut context = self.base_context(&lang, &format!("{prefix}404.html"));
-                context.insert("translations", &Vec::<Value>::new());
-                context.insert("alternates", &Value::Object(serde_json::Map::new()));
+                insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
                 templates::render(self.engine(&lang), "404.html", &context)?.into_bytes()
             }
             Kind::Static(path) | Kind::Asset(path) => {
@@ -480,8 +518,12 @@ impl Renderer<'_> {
         let section = light(&self.model.sections[page.section]);
         context.insert("page", view);
         context.insert("section", &section);
-        context.insert("translations", &view["translations"]);
-        context.insert("alternates", &alternates(&view["translations"]));
+        context.insert("meta_description", &view["meta_description"]);
+        context.insert(
+            "json_ld",
+            &templates::page_json_ld(self.site, i, &view["meta_description"]),
+        );
+        insert_translations(&mut context, &view["translations"], self.site);
         templates::render(self.engine(&lang), &template, &context)
     }
 
@@ -506,8 +548,8 @@ impl Renderer<'_> {
             context.insert("paginator", &paginator);
         }
         context.insert("section", view);
-        context.insert("translations", &view["translations"]);
-        context.insert("alternates", &alternates(&view["translations"]));
+        context.insert("meta_description", &view["meta_description"]);
+        insert_translations(&mut context, &view["translations"], self.site);
         templates::render(self.engine(&lang), &template, &context)
     }
 
@@ -547,11 +589,11 @@ impl Renderer<'_> {
         let translations = Value::Array(translations);
         let mut context = self.base_context(&lang, &current_path);
         context.insert("section", &light(&view));
+        context.insert("meta_description", &view["meta_description"]);
         context.insert("year", &year);
         context.insert("pages", &pages);
         context.insert("years", &view["years"]);
-        context.insert("translations", &translations);
-        context.insert("alternates", &alternates(&translations));
+        insert_translations(&mut context, &translations, self.site);
         templates::render(self.engine(&lang), &template, &context)
     }
 
@@ -570,8 +612,7 @@ impl Renderer<'_> {
             .map(|x| json!({"lang": x.lang, "permalink": x.permalink, "path": x.path, "title": x.name}))
             .collect();
         let translations = Value::Array(translations);
-        context.insert("translations", &translations);
-        context.insert("alternates", &alternates(&translations));
+        insert_translations(&mut context, &translations, self.site);
         templates::render(self.engine(&lang), "taxonomy_list.html", &context)
     }
 
@@ -599,8 +640,7 @@ impl Renderer<'_> {
         taxonomy_view.as_object_mut().map(|o| o.remove("terms"));
         context.insert("taxonomy", &taxonomy_view);
         context.insert("term", &view);
-        context.insert("translations", &view["translations"]);
-        context.insert("alternates", &alternates(&view["translations"]));
+        insert_translations(&mut context, &view["translations"], self.site);
         templates::render(self.engine(&lang), "taxonomy_single.html", &context)
     }
 
@@ -651,6 +691,57 @@ impl Renderer<'_> {
             context.insert(name, &value);
         }
         templates::render(self.engine(lang), "atom.xml", &context)
+    }
+
+    /// `<prefix>search.json`: every page of the language, newest first, with
+    /// what a client-side search matches on and links to.
+    fn render_search_index(&self, lang: &str) -> Result<String> {
+        let site = self.site;
+        let mut pages: Vec<usize> = (0..site.pages.len())
+            .filter(|&p| site.pages[p].file.lang == lang)
+            .collect();
+        pages.sort_by(|&a, &b| {
+            site.pages[b]
+                .date
+                .cmp(&site.pages[a].date)
+                .then_with(|| site.pages[a].file.rel.cmp(&site.pages[b].file.rel))
+        });
+        let entries: Vec<Value> = pages
+            .iter()
+            .map(|&p| {
+                let view = &self.model.pages[p];
+                let mut terms = serde_json::Map::new();
+                if let Some(taxonomies) = view["taxonomies"].as_object() {
+                    for (name, list) in taxonomies {
+                        let names: Vec<Value> = list
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|t| t["name"].clone())
+                            .collect();
+                        terms.insert(name.clone(), Value::Array(names));
+                    }
+                }
+                let mut entry = json!({
+                    "title": view["title"],
+                    "permalink": view["permalink"],
+                    "path": view["path"],
+                    "date": view["date"],
+                    "section": view["section"]["title"],
+                    "description": view["meta_description"],
+                    "taxonomies": terms,
+                });
+                if site.config.search.content {
+                    entry["content"] = Value::String(crate::util::html_to_text(
+                        view["content"].as_str().unwrap_or_default(),
+                    ));
+                }
+                entry
+            })
+            .collect();
+        let mut text = serde_json::to_string(&json!({"lang": lang, "pages": entries}))?;
+        text.push('\n');
+        Ok(text)
     }
 
     fn render_sitemap(&mut self) -> Result<String> {
@@ -741,6 +832,38 @@ impl Renderer<'_> {
         context.insert("entries", &values);
         templates::render(self.engine(&fallback), "sitemap.xml", &context)
     }
+}
+
+/// `translations` (each entry marked `current` when it is the language
+/// being rendered), `alternates`, and `x_default`, the fallback language's
+/// version for `hreflang="x-default"`, null when there is none.
+fn insert_translations(context: &mut tera::Context, translations: &Value, site: &Site) {
+    let lang = context
+        .get("lang")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let marked: Vec<Value> = translations
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| {
+            let mut t = t.clone();
+            if let Some(object) = t.as_object_mut() {
+                let current = object.get("lang").and_then(Value::as_str) == Some(lang.as_str());
+                object.insert("current".to_owned(), Value::Bool(current));
+            }
+            t
+        })
+        .collect();
+    let map = alternates(translations);
+    let x_default = map
+        .get(site.config.fallback())
+        .cloned()
+        .unwrap_or(Value::Null);
+    context.insert("translations", &marked);
+    context.insert("alternates", &map);
+    context.insert("x_default", &x_default);
 }
 
 /// `{lang: permalink}` for a translations list, so a language switcher is

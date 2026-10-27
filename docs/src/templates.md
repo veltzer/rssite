@@ -27,14 +27,17 @@ Every template gets:
 
 - `config`: the whole configuration, `config.extra` included.
 - `lang`: the language code being rendered.
-- `language`: `{code, name, direction, url_prefix, title, description, generate_feeds}`.
+- `language`: `{code, name, direction, url_prefix, title, description, generate_feeds, locale, date_format, date_format_long, is_fallback}`. `locale` is null unless the language sets it.
 - `languages`: the list of all languages, in configured order.
 - `current_path` and `current_url`.
-- `translations`: this document in every language it exists in, as a list of `{lang, permalink, path, title}` in configured language order.
+- `translations`: this document in every language it exists in, as a list of `{lang, permalink, path, title, current}` in configured language order; `current` is true for the language being rendered.
 - `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.url_prefix) }}`.
+- `x_default`: the fallback language's version of this document, for `<link rel="alternate" hreflang="x-default">`; null when there is none.
+- `meta_description`: what the document says about itself in `<meta name="description">` and `og:description`. A page's is its `description`, else the start of its summary or text (160 characters at most, cut at a word); a section's is its `description`; anything else, and anything without one, gets the language's description, else the site's.
+- `git`: the commit the site root is checked out at, `{commit, short, date, year, dirty}`, or null outside git. `date` is the committer date, so `git.year` is a copyright year that does not depend on the build clock. A template that reads `git` lists `.git/HEAD`, the branch's ref and `.git/index` as sources, so a new commit rebuilds the pages that show it. `dirty` is the exception to the rule that every output is a function of its listed sources: an unstaged edit changes it without changing them.
 - `rssite`: the generator, `{name, version, url}`, for a "made by" line in a footer.
 
-Pages get `page` and `section` (the parent, without its page list, plus `description` and `extra`). Sections get `section` with `pages`, `subsections` and `years` (the year archives, `{year, count, permalink, path}` newest first, empty unless `year_archives` is set), and `paginator` when paginated. A year archive gets `section` (light, with `description` and `extra`), `year`, `pages` (that year's, in section order) and `years`. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
+Pages get `page`, `section` (the parent, without its page list, plus `description` and `extra`) and `json_ld`, the page's schema.org JSON-LD (a `BlogPosting` when the page is dated, a `WebPage` otherwise, with its author, dates, terms as `keywords` and its translations as `workTranslation`), ready for `<script type="application/ld+json">{{ json_ld | safe }}</script>`. Sections get `section` with `pages`, `subsections` and `years` (the year archives, `{year, count, permalink, path}` newest first, empty unless `year_archives` is set), and `paginator` when paginated. A year archive gets `section` (light, with `description` and `extra`), `year`, `pages` (that year's, in section order) and `years`. Term pages get `taxonomy`, `term` and `paginator`; taxonomy lists get `taxonomy` and `terms`. Feeds get `pages`, `feed_url`, `feed_alternate`, `feed_title`, `last_updated` and, for scoped feeds, `section` or `term`. The sitemap gets `entries`.
 
 A page object:
 
@@ -42,9 +45,13 @@ A page object:
 title, description, date ("2026-04-28" or null), datetime (RFC 3339), year, month, day,
 updated, updated_datetime, slug, path, permalink, content, summary, toc, word_count,
 reading_time, taxonomies (map of name to a list of {name, slug, permalink, path}), extra,
-lang, translations, previous, next, draft, weight, relative_path, components, body_kind,
-section ({title, permalink, path, lang})
+lang, translations, meta_description, related, previous, next, draft, weight,
+relative_path, components, body_kind, section ({title, permalink, path, lang})
 ```
+
+`page.related` is up to `related.limit` pages of the same language (`{title, permalink, path, lang, date}`) sharing the most terms with this one, in the taxonomies `related.taxonomies` names (all by default): most shared terms first, then newest. A template that reads it depends on every content file, as one that reads `previous` does.
+
+A section object carries `page_count` and every term `page_count`, so a tag cloud is `terms | sort(attribute="page_count") | reverse`.
 
 `page.taxonomies.<name>` exists for every configured taxonomy, empty when the page has no terms, so `{% for tag in page.taxonomies.tags %}` is always safe.
 
@@ -68,7 +75,7 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 
 ## Filters
 
-- `date(format="%Y-%m-%d", lang=?)`: formats a date or RFC 3339 string with strftime, taking `%B`, `%b`, `%A` and `%a` from the language's `[dates]` names. An invalid format is an error.
+- `date(format=?, long=false, lang=?)`: formats a date or RFC 3339 string with strftime, taking `%B`, `%b`, `%A` and `%a` from the language's `[dates]` names. Without `format` it uses the language's `date_format`, or `date_format_long` with `long=true`, so `{{ page.date | date }}` is right in every language. An invalid format is an error.
 - `slugify(mode="safe")`: the site's slugifier.
 - `markdown(inline=false)`: render a string as markdown. `inline=true` unwraps a single paragraph; a string that renders to anything else (several paragraphs, a heading) is returned as it is.
 

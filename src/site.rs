@@ -36,6 +36,8 @@ pub struct Page {
     pub rendered: Rendered,
     /// Content files the body links to, relative to the site root.
     pub link_sources: Vec<String>,
+    /// The pages of the same language sharing the most terms, best first.
+    pub related: Vec<usize>,
 }
 
 #[derive(Debug)]
@@ -179,7 +181,7 @@ pub fn content_url_paths(text: &str) -> Vec<String> {
 pub fn reads_other_pages(text: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r"get_page\(|get_section\(|get_taxonomy\(|get_taxonomy_url\(|\.pages\b|subsections|\.previous\b|\.next\b")
+        regex::Regex::new(r"get_page\(|get_section\(|get_taxonomy\(|get_taxonomy_url\(|\.pages\b|subsections|\.previous\b|\.next\b|\.related\b")
             .expect("valid regex")
     });
     re.is_match(text)
@@ -206,6 +208,8 @@ pub struct Site {
     /// `(directory components, language)` of every section index dropped
     /// as a draft: its pages and assets go with it.
     pub drafted_sections: BTreeSet<(Vec<String>, String)>,
+    /// The commit the site root is checked out at, when it is in git.
+    pub git: Option<crate::git::GitInfo>,
 }
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
@@ -292,6 +296,7 @@ impl Site {
             page_lookup: BTreeMap::new(),
             section_lookup: BTreeMap::new(),
             drafted_sections: BTreeSet::new(),
+            git: None,
         };
         site.content_files = files
             .iter()
@@ -300,9 +305,12 @@ impl Site {
         site.build_sections(&files)?;
         site.build_pages(files)?;
         site.pair_translations()?;
+        site.require_translations()?;
         site.resolve_body_sources()?;
         site.sort_sections()?;
         site.build_taxonomies()?;
+        site.relate_pages();
+        site.git = crate::git::GitInfo::read(&site.root);
         site.render_bodies()?;
         site.load_templates()?;
         site.static_files = site.layered_files(&site.config.static_dir)?;
@@ -619,6 +627,7 @@ impl Site {
                 body_source: None,
                 rendered: Rendered::default(),
                 link_sources: Vec::new(),
+                related: Vec::new(),
                 file,
             };
             self.page_lookup.insert(lookup_key, self.pages.len());
@@ -673,6 +682,44 @@ impl Site {
             let group = &section_groups[key];
             self.sections[i].translations =
                 codes.iter().filter_map(|c| group.get(c).copied()).collect();
+        }
+        Ok(())
+    }
+
+    /// A section with `require_translations` has every page in every
+    /// language the section itself exists in.
+    fn require_translations(&self) -> Result<()> {
+        for section in self
+            .sections
+            .iter()
+            .filter(|s| s.front.require_translations)
+        {
+            let languages: Vec<&str> = section
+                .translations
+                .iter()
+                .map(|&t| self.sections[t].lang.as_str())
+                .collect();
+            for &p in &section.pages {
+                let page = &self.pages[p];
+                let missing: Vec<&str> = languages
+                    .iter()
+                    .copied()
+                    .filter(|lang| {
+                        !page
+                            .translations
+                            .iter()
+                            .any(|&t| self.pages[t].file.lang == *lang)
+                    })
+                    .collect();
+                if !missing.is_empty() {
+                    bail!(
+                        "content file {}: section {} sets require_translations, but this page has no {} translation",
+                        page.file.rel,
+                        section.rel().unwrap_or("(root)"),
+                        missing.join(", ")
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -862,6 +909,11 @@ impl Site {
             if let Some(file) = &taxonomy.translations {
                 translation_tables
                     .insert(taxonomy.name.clone(), self.load_term_translations(file)?);
+            } else if taxonomy.infer_translations {
+                translation_tables.insert(
+                    taxonomy.name.clone(),
+                    self.infer_term_translations(&taxonomy.name)?,
+                );
             }
         }
         for code in &codes {
@@ -963,6 +1015,131 @@ impl Site {
             }
         }
         Ok(())
+    }
+
+    /// `related` for every page: the pages of its language sharing the most
+    /// terms of the counted taxonomies, then the newest, then by file name.
+    fn relate_pages(&mut self) {
+        let limit = self.config.related.limit;
+        let counted = &self.config.related.taxonomies;
+        let mut all = Vec::with_capacity(self.pages.len());
+        for (i, page) in self.pages.iter().enumerate() {
+            let mut shared: BTreeMap<usize, usize> = BTreeMap::new();
+            if limit > 0 {
+                for (name, terms) in &page.front.taxonomies {
+                    if !counted.is_empty() && !counted.contains(name) {
+                        continue;
+                    }
+                    let Some(taxonomy) = self
+                        .taxonomies
+                        .iter()
+                        .find(|t| t.name == *name && t.lang == page.file.lang)
+                    else {
+                        continue;
+                    };
+                    for term in terms {
+                        let Some(term) = taxonomy.terms.iter().find(|t| t.name == *term) else {
+                            continue;
+                        };
+                        for &other in term.pages.iter().filter(|&&o| o != i) {
+                            *shared.entry(other).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            let mut related: Vec<(usize, usize)> = shared.into_iter().collect();
+            related.sort_by(|&(a, ca), &(b, cb)| {
+                cb.cmp(&ca)
+                    .then_with(|| self.pages[b].date.cmp(&self.pages[a].date))
+                    .then_with(|| self.pages[a].file.rel.cmp(&self.pages[b].file.rel))
+            });
+            related.truncate(limit);
+            all.push(related.into_iter().map(|(p, _)| p).collect());
+        }
+        for (page, related) in self.pages.iter_mut().zip(all) {
+            page.related = related;
+        }
+    }
+
+    /// Term translation rows read off the pages: a page and its translation
+    /// list their terms in the same order, so position N pairs the two Nth
+    /// terms. Pairs chain into rows (en-he from one page, he-fr from
+    /// another), and a row holding two terms of one language is an error:
+    /// some page lists its terms in a different order than its translation.
+    fn infer_term_translations(&self, name: &str) -> Result<Vec<BTreeMap<String, String>>> {
+        // Union-find over (lang, term), each union remembering the page
+        // that made it so a conflict can name a file.
+        let mut ids: BTreeMap<(String, String), usize> = BTreeMap::new();
+        let mut parent: Vec<usize> = Vec::new();
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        }
+        let mut evidence: BTreeMap<(String, String), String> = BTreeMap::new();
+        let empty = Vec::new();
+        for (i, page) in self.pages.iter().enumerate() {
+            // Each group once, from its first member.
+            if page.translations.first() != Some(&i) || page.translations.len() < 2 {
+                continue;
+            }
+            let lists: Vec<(usize, &Vec<String>)> = page
+                .translations
+                .iter()
+                .map(|&t| {
+                    (
+                        t,
+                        self.pages[t].front.taxonomies.get(name).unwrap_or(&empty),
+                    )
+                })
+                .collect();
+            let (first, first_terms) = lists[0];
+            for &(other, terms) in &lists[1..] {
+                if terms.len() != first_terms.len() {
+                    bail!(
+                        "taxonomy {name} infers its translations from the pages, but content file {} lists {} {name} and its translation {} lists {}",
+                        self.pages[first].file.rel,
+                        first_terms.len(),
+                        self.pages[other].file.rel,
+                        terms.len()
+                    );
+                }
+            }
+            for position in 0..first_terms.len() {
+                let mut members = Vec::new();
+                for &(t, terms) in &lists {
+                    let key = (self.pages[t].file.lang.clone(), terms[position].clone());
+                    evidence
+                        .entry(key.clone())
+                        .or_insert_with(|| self.pages[t].file.rel.clone());
+                    let next = ids.len();
+                    let id = *ids.entry(key).or_insert(next);
+                    if id == parent.len() {
+                        parent.push(id);
+                    }
+                    members.push(id);
+                }
+                for &m in &members[1..] {
+                    let (a, b) = (find(&mut parent, members[0]), find(&mut parent, m));
+                    parent[b] = a;
+                }
+            }
+        }
+        let mut rows: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
+        for ((lang, term), &id) in &ids {
+            let root = find(&mut parent, id);
+            let row = rows.entry(root).or_default();
+            if let Some(other) = row.insert(lang.clone(), term.clone()) {
+                bail!(
+                    "taxonomy {name}: the {lang:?} terms {other:?} and {term:?} are both paired with the same term in another language (see {} and {}); a page and its translation must list their terms in the same order",
+                    evidence[&(lang.clone(), other.clone())],
+                    evidence[&(lang.clone(), term.clone())]
+                );
+            }
+        }
+        Ok(rows.into_values().collect())
     }
 
     fn load_term_translations(&self, file: &str) -> Result<Vec<BTreeMap<String, String>>> {
@@ -1202,6 +1379,11 @@ impl Site {
             .into_iter()
             .filter(|p| self.root.join(p).is_file())
             .collect();
+        if let Some(git) = &self.git
+            && crate::git::reads_git(text)
+        {
+            out.extend(git.sources.iter().cloned());
+        }
         for c in content_url_paths(text) {
             if let Some((_, rel)) = self.resolve_content_path(&c, lang)
                 && !rel.is_empty()

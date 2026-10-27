@@ -52,7 +52,7 @@ anything = "goes here"         # templates read page.extra
 +++
 ```
 
-A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
+A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `pager_aliases`, `require_translations`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
 
 ## Translations
 
@@ -83,6 +83,8 @@ body_from = "en"
 
 Templates see the translations as `page.translations` (a list ordered as the languages are configured) and as `alternates` (a map from language code to permalink).
 
+`require_translations = true` on a section index makes a missing translation an error: every page of the section must exist in every language the section itself exists in, and the error names the page and the language it lacks.
+
 ## Links between pages
 
 A markdown link to `@/blog/post.md` resolves to that post's permalink in the current language. `@/blog/post.he.md` names the language explicitly. `@/blog/_index.md` links to a section. A fragment (`@/blog/post.md#heading`) is kept. A link whose target does not exist fails the build and names the file.
@@ -93,7 +95,9 @@ Headings get ids from their text (`## Heading one` becomes `heading-one`, a repe
 
 ## Sorting and pagination
 
-`sort_by = "date"` sorts newest first. `paginate_by = 10` writes the first ten posts at the section's URL and the rest at `page/2/`, `page/3/` and so on. There is no `page/1/`: the first pager is the section itself, and nothing redirects to it.
+`sort_by = "date"` sorts newest first. `paginate_by = 10` writes the first ten posts at the section's URL and the rest at `page/2/`, `page/3/` and so on. There is no `page/1/`: the first pager is the section itself.
+
+`pager_aliases = "/page/{n}/"` writes a redirect per pager, `{n}` being its number: `/page/1/` to the section, `/page/2/` to its second pager, and so on for as many pagers as the section has. It is for URLs from before the section moved, which a hand-written list would stop covering as the section grows. It needs `paginate_by`.
 
 `year_archives = true` writes one listing per year of the section's dated pages at `<section>/<year>/`, rendered with `archive_template` (default `archive.html`), and gives the section a `years` list for templates to link from. A year's page in one language has the same year in the other languages as its translations, where those have pages that year, so the alternates and the language switcher work there as everywhere.
 

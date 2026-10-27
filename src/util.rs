@@ -105,6 +105,79 @@ pub fn escape_html(text: &str) -> String {
     out
 }
 
+/// The text of an HTML fragment: tags dropped (with what `<script>` and
+/// `<style>` hold), the common entities decoded, whitespace collapsed.
+pub fn html_to_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let tag = &rest[at..];
+        // An inline element joins the text around it; anything else (a
+        // paragraph, a heading, a line break) separates words.
+        let name: String = tag[1..]
+            .trim_start_matches('/')
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        const INLINE: &[&str] = &[
+            "a", "abbr", "b", "cite", "code", "del", "em", "i", "ins", "kbd", "mark", "q", "s",
+            "small", "span", "strong", "sub", "sup", "time", "u",
+        ];
+        if !INLINE.contains(&name.as_str()) {
+            out.push(' ');
+        }
+        let lower: String = tag.chars().take(8).collect::<String>().to_ascii_lowercase();
+        let skip_to = if lower.starts_with("<script") {
+            Some("</script>")
+        } else if lower.starts_with("<style") {
+            Some("</style>")
+        } else if tag.starts_with("<!--") {
+            Some("-->")
+        } else {
+            None
+        };
+        rest = match skip_to {
+            Some(end) => match tag.to_ascii_lowercase().find(end) {
+                Some(e) => &tag[e + end.len()..],
+                None => "",
+            },
+            None => match tag.find('>') {
+                Some(e) => &tag[e + 1..],
+                None => "",
+            },
+        };
+    }
+    out.push_str(rest);
+    let decoded = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&amp;", "&");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// At most `max` characters of `text`, cut at a word boundary with an
+/// ellipsis when anything was cut.
+pub fn truncate_words(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(max).collect();
+    let cut = match cut.rfind(' ') {
+        Some(at) if at > 0 => &cut[..at],
+        _ => cut.as_str(),
+    };
+    format!(
+        "{}…",
+        cut.trim_end_matches(|c: char| c.is_whitespace() || ",;:.-".contains(c))
+    )
+}
+
 /// Whether `rel`, a `/`-separated path, matches the glob `pattern`: `*`
 /// matches within one path segment, `**` any number of segments, `?` one
 /// character. `fonts/*` matches `fonts/a.woff2` but not `fonts/x/a.woff2`;
@@ -147,6 +220,34 @@ pub fn emit(text: &str) -> Result<()> {
     match written {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         other => other.context("writing to stdout"),
+    }
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::{html_to_text, truncate_words};
+
+    #[test]
+    fn html_becomes_its_text() {
+        assert_eq!(html_to_text("<p>a <b>b</b></p>\n<p>c&amp;d</p>"), "a b c&d");
+        assert_eq!(
+            html_to_text("<style>p{x:1}</style>x<script>y()</script>z"),
+            "x z"
+        );
+        assert_eq!(html_to_text("a<!-- more -->b"), "a b");
+        assert_eq!(html_to_text("&lt;tag&gt; &quot;q&quot;"), "<tag> \"q\"");
+        assert_eq!(html_to_text("unclosed <br"), "unclosed");
+        assert_eq!(html_to_text("see <a href=\"x\">this</a>."), "see this.");
+        assert_eq!(html_to_text("a<br>b"), "a b");
+    }
+
+    #[test]
+    fn truncation_cuts_at_a_word() {
+        assert_eq!(truncate_words("short", 10), "short");
+        assert_eq!(truncate_words("one two three", 9), "one two…");
+        assert_eq!(truncate_words("one, two three", 6), "one…");
+        assert_eq!(truncate_words("abcdefghij", 4), "abcd…");
+        assert_eq!(truncate_words("שלום עולם גדול", 10), "שלום עולם…");
     }
 }
 

@@ -4,6 +4,7 @@
 mod builtin;
 mod config;
 mod content;
+mod git;
 mod i18n;
 mod init;
 mod markdown;

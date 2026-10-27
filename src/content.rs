@@ -147,6 +147,14 @@ pub struct SectionFront {
     pub archive_template: Option<String>,
     #[serde(default)]
     pub smart_punctuation: Option<bool>,
+    /// A redirect per pager: `"/page/{n}/"` writes `/page/2/` sending the
+    /// reader to this section's second pager, for every pager it has.
+    #[serde(default)]
+    pub pager_aliases: Option<String>,
+    /// Every page of the section must exist in every language the section
+    /// exists in; a missing translation is an error naming the page.
+    #[serde(default)]
+    pub require_translations: bool,
 }
 
 fn default_paginate_path() -> String {

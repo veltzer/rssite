@@ -63,6 +63,15 @@ pub struct Config {
     pub feeds: Feeds,
     #[serde(default)]
     pub sitemap: Sitemap,
+    #[serde(default)]
+    pub search: Search,
+    #[serde(default)]
+    pub related: Related,
+    /// Retired URLs, each written as a redirect page to where its content
+    /// lives now. For URLs that are not a page's own `aliases`: a section
+    /// that moved, a file that is gone, an address from an older site.
+    #[serde(default)]
+    pub redirects: Vec<Redirect>,
     /// Free-form values exposed to templates as `config.extra`.
     #[serde(default)]
     pub extra: toml::Table,
@@ -82,6 +91,19 @@ pub struct Publish {
     pub files: Vec<String>,
 }
 
+/// One `[[redirects]]` entry: the URL `from` sends a reader to `to`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Redirect {
+    /// A site path, written like an alias: `/old/` (or `old`) is
+    /// `old/index.html`, `/keys/x.asc` is that file.
+    pub from: String,
+    /// `@/blog/post.md` (with a language suffix, or in the fallback
+    /// language), a site path the build writes (`/en/blog/`), or an
+    /// absolute URL, which is not checked.
+    pub to: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Language {
@@ -99,6 +121,15 @@ pub struct Language {
     /// URL prefix, `/{code}/` by default. Must start and end with `/`.
     #[serde(default)]
     pub url_prefix: Option<String>,
+    /// The locale tag for `og:locale` and the like (`en_US`, `he_IL`).
+    #[serde(default)]
+    pub locale: Option<String>,
+    /// The `date` filter's format when none is given; `%Y-%m-%d` by default.
+    #[serde(default)]
+    pub date_format: Option<String>,
+    /// The `date` filter's format with `long=true`; `date_format` by default.
+    #[serde(default)]
+    pub date_format_long: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -133,6 +164,11 @@ pub struct Taxonomy {
     /// pairing terms across languages. Relative to the site root.
     #[serde(default)]
     pub translations: Option<String>,
+    /// Pair terms through the pages instead of a file: a page and its
+    /// translation list their terms in the same order, so the Nth term of
+    /// one is the Nth term of the other.
+    #[serde(default)]
+    pub infer_translations: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -176,6 +212,11 @@ pub struct Feeds {
     pub limit: usize,
     #[serde(default = "default_feed_filename")]
     pub filename: String,
+    /// Also write the fallback language's feed at the site root
+    /// (`/atom.xml`), for readers subscribed before the site had languages:
+    /// the same bytes, self link included.
+    #[serde(default)]
+    pub root: bool,
 }
 
 impl Default for Feeds {
@@ -183,6 +224,52 @@ impl Default for Feeds {
         Feeds {
             limit: default_feed_limit(),
             filename: default_feed_filename(),
+            root: false,
+        }
+    }
+}
+
+/// A search index per language: `<prefix><filename>`, a JSON list of every
+/// page with its title, permalink, date, description and terms.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Search {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_search_filename")]
+    pub filename: String,
+    /// Include each page's text, which makes the index as large as the site.
+    #[serde(default)]
+    pub content: bool,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Search {
+            enabled: false,
+            filename: default_search_filename(),
+            content: false,
+        }
+    }
+}
+
+/// `page.related`: the pages of the same language sharing the most terms.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Related {
+    /// How many; 0 turns `page.related` into an empty list.
+    #[serde(default = "default_related_limit")]
+    pub limit: usize,
+    /// The taxonomies whose terms count; every one by default.
+    #[serde(default)]
+    pub taxonomies: Vec<String>,
+}
+
+impl Default for Related {
+    fn default() -> Self {
+        Related {
+            limit: default_related_limit(),
+            taxonomies: Vec::new(),
         }
     }
 }
@@ -235,6 +322,12 @@ fn default_feed_limit() -> usize {
 }
 fn default_feed_filename() -> String {
     "atom.xml".into()
+}
+fn default_search_filename() -> String {
+    "search.json".into()
+}
+fn default_related_limit() -> usize {
+    5
 }
 fn default_true() -> bool {
     true
@@ -320,6 +413,12 @@ impl Config {
                     taxonomy.paginate_path
                 );
             }
+            if taxonomy.infer_translations && taxonomy.translations.is_some() {
+                bail!(
+                    "{CONFIG_FILE}: taxonomy {}: set translations or infer_translations, not both",
+                    taxonomy.name
+                );
+            }
             if let Some(translations) = &mut taxonomy.translations {
                 while translations.ends_with('/') {
                     translations.pop();
@@ -363,6 +462,41 @@ impl Config {
                 "{CONFIG_FILE}: feeds.filename {:?} must be a relative file name",
                 self.feeds.filename
             );
+        }
+        if self.search.filename.is_empty()
+            || self.search.filename.starts_with('/')
+            || self.search.filename.ends_with('/')
+            || self.search.filename.split('/').any(|part| part == "..")
+        {
+            bail!(
+                "{CONFIG_FILE}: search.filename {:?} must be a relative file name",
+                self.search.filename
+            );
+        }
+        for name in &self.related.taxonomies {
+            if !names.contains(name) {
+                bail!(
+                    "{CONFIG_FILE}: related.taxonomies names {name:?}, which is not a [[taxonomies]] entry"
+                );
+            }
+        }
+        for redirect in &self.redirects {
+            if redirect.from.trim_matches('/').is_empty()
+                || redirect.from.contains("://")
+                || redirect.from.split('/').any(|part| part == "..")
+            {
+                bail!(
+                    "{CONFIG_FILE}: [[redirects]] from = {:?} must be a path inside the site",
+                    redirect.from
+                );
+            }
+            let to = &redirect.to;
+            if !(to.starts_with("@/") || to.starts_with('/') || to.contains("://")) {
+                bail!(
+                    "{CONFIG_FILE}: [[redirects]] from = {:?}: to = {to:?} must be @/<content path>, a site path starting with '/', or an absolute URL",
+                    redirect.from
+                );
+            }
         }
         if let Some(theme) = &self.theme
             && (theme.is_empty() || theme.contains('/') || theme.contains('\\') || theme == "..")
