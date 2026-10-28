@@ -112,6 +112,8 @@ Ownership
 : Every value has exactly one owner.
 ```
 
+That makes any line starting with `:` right after a line of text a definition, so a paragraph wrapped to put a colon (or an emoji shortcode) first on a line needs rewrapping.
+
 Math, when `[markdown] math` or the page's `math` is on: `$…$` becomes `<span class="math math-inline">` and `$$…$$` becomes `<span class="math math-display">`, the TeX inside escaped and otherwise untouched. A renderer on the page (KaTeX's auto-render, MathJax) turns them into formulas. It is off by default because with it on, two dollar amounts in one sentence are a formula.
 
 Code blocks take options after the language, separated by commas, in zola's syntax:
@@ -122,7 +124,17 @@ fn main() {}
 ```
 ````
 
+`title=src/main.rs` (quotes optional, for a name with spaces) puts a caption above the block: it becomes `<figure class="code-block"><figcaption>src/main.rs</figcaption><pre>…</pre></figure>`, styled by the site.
+
 `linenos` numbers the lines (from `linenostart`, default 1), and `hl_lines` marks lines of the block, counted from 1 whatever `linenostart` says. Each line then becomes `<span class="line">`, with `hl` added on a marked line and `data-line="N"` when numbered; `highlight.css` styles them, and a site without highlighting styles the same classes itself. The numbers are drawn by CSS, so copying the code does not copy them. A malformed `hl_lines`, or one naming a line past the end of the block, is an error. Other options, such as mdBook's `ignore`, are left alone, and a block without options renders exactly as before.
+
+Diagrams: a fenced block whose language is in `[markdown] diagram_languages` (`["mermaid"]` by default) is neither highlighted nor numbered. Its source, escaped, goes into `<pre class="mermaid">` for a script on the page (mermaid.js) to draw.
+
+On a page whose language has `direction = "rtl"`, code blocks get `<pre dir="ltr">` (a titled one, `<figure dir="ltr">`) and inline code gets `<code dir="ltr">`, so the bidi algorithm does not reorder punctuation and operators inside them. Nothing needs to be written for it.
+
+`[markdown] heading_anchors = "start"` or `"end"` adds a link to each heading, to itself: `<a class="heading-anchor" href="#id" aria-hidden="true" tabindex="-1">#</a>`, before or after the heading's text. Start and end rather than left and right, so a right-to-left page puts it on the correct side. It is not part of the heading's text in `page.toc`. The default, `"none"`, adds nothing.
+
+`[markdown] emoji = true` turns GitHub's shortcodes into emoji: `:rocket:` becomes 🚀. A name that is not a shortcode, and a time like `10:30:00`, stays as written; code is never touched.
 
 Links that leave the site, absolute `http` or `https` URLs outside `base_url`, can get `target="_blank"` (with `rel="noopener"`), `rel="nofollow"` and `rel="noreferrer"`, each switched on in `[markdown]`. Links in raw HTML are left as they are.
 

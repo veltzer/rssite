@@ -15,6 +15,13 @@ code = "en"
 name = "English"
 direction = "ltr"
 
+# One Hebrew page, to show code kept left to right on a right-to-left page.
+[[languages]]
+code = "he"
+name = "עברית"
+direction = "rtl"
+title = "הדגמות rssite"
+
 [markdown]
 highlight = true
 highlight_theme = "InspiredGitHub"
@@ -24,6 +31,12 @@ smart_punctuation = false
 # Links that leave the site open in a new tab and carry no ranking.
 external_links_target_blank = true
 external_links_no_follow = true
+# A # link after every heading, shown on hover (see sass/style.scss).
+heading_anchors = "end"
+# :rocket: as an emoji.
+emoji = true
+# ```mermaid blocks are left for mermaid.js; this is the default.
+diagram_languages = ["mermaid"]
 
 [feeds]
 limit = 20

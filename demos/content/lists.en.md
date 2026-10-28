@@ -13,6 +13,9 @@ Borrowing
 : A reference lends a value without taking it.
 : A second definition of the same term.
 
+Any line that starts with `:` right after a line of text is a definition, so
+a sentence wrapped to begin with a colon needs rewrapping.
+
 ## Task lists
 
 - [x] Write the demo pages

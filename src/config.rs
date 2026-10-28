@@ -202,6 +202,15 @@ pub struct Markdown {
     pub external_links_no_follow: bool,
     #[serde(default)]
     pub external_links_no_referrer: bool,
+    /// Fenced block languages left for a client-side renderer.
+    #[serde(default = "default_diagram_languages")]
+    pub diagram_languages: Vec<String>,
+    /// A `#` link on every heading: "none", "start" or "end".
+    #[serde(default)]
+    pub heading_anchors: crate::markdown::HeadingAnchors,
+    /// `:rocket:` as 🚀.
+    #[serde(default)]
+    pub emoji: bool,
 }
 
 impl Default for Markdown {
@@ -214,6 +223,9 @@ impl Default for Markdown {
             external_links_target_blank: false,
             external_links_no_follow: false,
             external_links_no_referrer: false,
+            diagram_languages: default_diagram_languages(),
+            heading_anchors: crate::markdown::HeadingAnchors::None,
+            emoji: false,
         }
     }
 }
@@ -232,6 +244,11 @@ impl Config {
                 no_referrer: self.markdown.external_links_no_referrer,
             },
             base_url: self.base_url.clone(),
+            diagrams: self.markdown.diagram_languages.clone(),
+            heading_anchors: self.markdown.heading_anchors,
+            emoji: self.markdown.emoji,
+            // Set per page, from its language's direction.
+            code_ltr: false,
         }
     }
 }
@@ -346,6 +363,10 @@ fn default_publish_files() -> Vec<String> {
 fn default_paginate_path() -> String {
     "page".into()
 }
+fn default_diagram_languages() -> Vec<String> {
+    vec!["mermaid".to_owned()]
+}
+
 fn default_highlight_theme() -> String {
     "InspiredGitHub".into()
 }
@@ -806,6 +827,29 @@ mod tests {
         assert!(options.external_links.no_follow);
         assert!(options.external_links.no_referrer);
         assert_eq!(options.base_url, config.base_url);
+        assert_eq!(defaults.diagrams, ["mermaid"]);
+        assert_eq!(
+            defaults.heading_anchors,
+            crate::markdown::HeadingAnchors::None
+        );
+        assert!(!defaults.emoji);
+        let text = format!(
+            "{MINIMAL}[markdown]\ndiagram_languages = [\"mermaid\", \"dot\"]\nheading_anchors = \"end\"\nemoji = true\n"
+        );
+        let options = parse(&text).unwrap().render_options();
+        assert_eq!(options.diagrams, ["mermaid", "dot"]);
+        assert_eq!(
+            options.heading_anchors,
+            crate::markdown::HeadingAnchors::End
+        );
+        assert!(options.emoji);
+        assert!(
+            parse(&format!(
+                "{MINIMAL}[markdown]\nheading_anchors = \"left\"\n"
+            ))
+            .is_err(),
+            "start and end, not left and right"
+        );
     }
 
     #[test]

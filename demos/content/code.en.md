@@ -58,6 +58,19 @@ int main(void)
 Select the code and copy it: the line numbers are drawn by CSS and do not
 come along.
 
+## A title
+
+` ```rust,title=src/main.rs ` puts a caption above the block, usually a file
+name. The block becomes a `<figure class="code-block">` with a
+`<figcaption>`; `sass/style.scss` styles it. Quotes are optional:
+`title="my file.rs"`.
+
+```rust,title=src/main.rs,linenos
+fn main() {
+    println!("Hello from a titled block");
+}
+```
+
 ## A language rssite does not know
 
 ` ```nosuchlang,linenos ` is escaped and numbered, just not coloured.

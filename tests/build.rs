@@ -854,3 +854,25 @@ fn the_demo_site_checks() {
     let check = run(&demos, &["check"]);
     assert!(check.ok, "demos/ no longer builds:\n{}", check.stderr);
 }
+
+#[test]
+fn code_is_left_to_right_only_in_a_right_to_left_language() {
+    let dir = site("code-direction");
+    for lang in ["en", "he"] {
+        write(
+            &dir,
+            &format!("content/blog/code.{lang}.md"),
+            "+++\ntitle = \"Code\"\ndate = 2026-01-04\n+++\n\nRun `make`.\n\n```sh\nmake\n```\n",
+        );
+    }
+    let build = run(&dir, &["build"]);
+    assert!(build.ok, "{}", build.stderr);
+    let he = read(&dir, "_site/he/blog/code/index.html");
+    assert!(he.contains("<code dir=\"ltr\">make</code>"), "{he}");
+    assert!(he.contains("<pre dir=\"ltr\" class=\"highlight\">"), "{he}");
+    let en = read(&dir, "_site/en/blog/code/index.html");
+    assert!(
+        !en.contains("<code dir=") && !en.contains("<pre dir="),
+        "{en}"
+    );
+}

@@ -19,7 +19,10 @@ Done since this list was written, documented in
 [Content](docs/src/content.md#markdown) and
 [Getting started](docs/src/getting-started.md): callouts, definition lists,
 opt-in math, `rel` and `target` on external links, line numbers and
-highlighted lines in code blocks, and live reload in `serve`.
+highlighted lines in code blocks, live reload in `serve`, mermaid diagram
+blocks, heading anchor links, code block titles, left-to-right code on
+right-to-left pages, and emoji shortcodes. The [demo site](demos/) shows each
+of them.
 
 ## Bigger features
 
@@ -59,6 +62,31 @@ highlighted lines in code blocks, and live reload in `serve`.
    (`h2` to `h4`). Both are in the features list; `check` is their home.
 5. **JSON Feed** and **Sass source maps**: little value for veltzer.org,
    common elsewhere.
+
+## Seen elsewhere since
+
+Ideas from a second look at other generators, after the cheap ones of that
+look were done.
+
+1. **Settings for a whole section**: Hugo's `cascade`, 11ty's directory data
+   files. A section's `_index` sets front matter (`math = true`, a template)
+   for every page under it, instead of each page repeating it.
+2. **Including real files**: mdBook's `{{#include file.rs:10:20}}`, MkDocs'
+   snippets. Code in a post comes from a source file, with a line range, and
+   cannot go stale; the file is a source of the page in the manifest.
+3. **Last-modified date per page from git**: Hugo's `enableGitInfo`. Each
+   page's `lastmod` from its file's history, for the sitemap's `<lastmod>`
+   and an "updated" line, without writing `updated =` by hand.
+4. **Render hooks**: Hugo's `render-link.html`, `render-image.html` and the
+   rest. A template takes over how a link, image, heading or code block is
+   written: images in `<figure>` with `loading="lazy"`, and options like the
+   external link ones without new code each time.
+5. **More output formats**: `llms.txt` and a raw markdown copy of each page
+   for AI crawlers, as Docusaurus and Mintlify now write.
+6. **Social preview images**: an Open Graph image per post with its title on
+   a template (Astro, Hugo with a plugin). Hebrew text shaping is the work.
+7. **Privacy-friendly embeds**: video players that load on click, as Hugo's
+   privacy settings and "lite" YouTube embeds do. Needs shortcodes first.
 
 ## Where to start
 

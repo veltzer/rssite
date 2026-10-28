@@ -26,6 +26,9 @@ With a fragment, `@/code.md#line-numbers` gives
 ## Heading anchors
 
 Every heading gets an id from its text; the contents box above lists them.
+This site also sets `heading_anchors = "end"`: hover over a heading and a `#`
+appears after it, a link to that heading to copy. `"start"` puts it before
+the heading instead (on a Hebrew page, that is on the right).
 
 ### A heading with a chosen id {#chosen}
 

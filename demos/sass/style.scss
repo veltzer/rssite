@@ -34,6 +34,50 @@ dt {
   font-weight: bold;
 }
 
+header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.languages a + a {
+  margin-inline-start: 1rem;
+}
+
+.languages a[aria-current] {
+  font-weight: bold;
+  text-decoration: none;
+}
+
+// rssite's heading anchors: <a class="heading-anchor"> at the end of each
+// heading, faint until the heading is hovered.
+.heading-anchor {
+  color: #8c959f;
+  text-decoration: none;
+  opacity: 0;
+}
+
+:is(h1, h2, h3, h4):hover .heading-anchor {
+  opacity: 1;
+}
+
+// A titled code block is <figure class="code-block"><figcaption>.
+figure.code-block {
+  margin: 1rem 0;
+
+  figcaption {
+    padding: 0.3rem 1rem;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    background: #eaeef2;
+    border-radius: 6px 6px 0 0;
+  }
+
+  pre {
+    margin-top: 0;
+    border-radius: 0 0 6px 6px;
+  }
+}
+
 .toc,
 .pager {
   margin: 1.5rem 0;

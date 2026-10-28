@@ -12,6 +12,8 @@ anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 deunicode = "1"
+# GitHub's :shortcode: names, for `[markdown] emoji`.
+emojis = "0.9"
 grass = { version = "0.13", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # The HTML writer's own escaping, for the external links rssite writes itself.

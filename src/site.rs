@@ -1269,7 +1269,13 @@ impl Site {
     ) -> Result<(Rendered, Vec<String>)> {
         match kind {
             BodyKind::Markdown => {
-                let options = self.render_options(overrides);
+                let options = RenderOptions {
+                    code_ltr: self
+                        .config
+                        .language(lang)
+                        .is_some_and(|l| l.direction == crate::config::Direction::Rtl),
+                    ..self.render_options(overrides)
+                };
                 let resolve = |path: &str| {
                     self.resolve_content_path(path, lang)
                         .map(|(permalink, _)| permalink)

@@ -10,6 +10,11 @@
     the TeX inside; KaTeX draws it in the browser. -#}
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+{#- ```mermaid blocks arrive as <pre class="mermaid">; mermaid.js draws them. -#}
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true });
+</script>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
   document.querySelectorAll("span.math").forEach(function (el) {
@@ -22,7 +27,14 @@ document.addEventListener("DOMContentLoaded", function () {
 </script>
 </head>
 <body>
-<header><a href="{{ get_url(path="@/_index.md") }}">{{ language.title }}</a></header>
+<header>
+  <a href="{{ get_url(path="@/_index.md") }}">{{ language.title }}</a>
+  <nav class="languages">
+    {%- for entry in languages %}
+    <a href="{{ alternates | get(key=entry.code, default=entry.url_prefix) }}" hreflang="{{ entry.code }}"{% if entry.code == lang %} aria-current="true"{% endif %}>{{ entry.name }}</a>
+    {%- endfor %}
+  </nav>
+</header>
 <main>
 {% block content %}{% endblock %}
 </main>

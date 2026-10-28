@@ -65,6 +65,9 @@ math = false               # $…$ and $$…$$ as math; a page or section can ov
 external_links_target_blank = false  # links leaving the site open in a new tab
 external_links_no_follow = false     # rel="nofollow" on them
 external_links_no_referrer = false   # rel="noreferrer" on them
+diagram_languages = ["mermaid"]      # fenced blocks left for a client-side renderer
+heading_anchors = "none"             # a # link on headings: "none", "start" or "end"
+emoji = false                        # :rocket: as an emoji
 
 [feeds]
 limit = 20                 # newest entries per feed
