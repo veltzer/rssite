@@ -192,6 +192,16 @@ pub struct Markdown {
     /// A syntect theme name; its CSS is written to `highlight.css`.
     #[serde(default = "default_highlight_theme")]
     pub highlight_theme: String,
+    /// `$…$` and `$$…$$` as math; a page or section can override it.
+    #[serde(default)]
+    pub math: bool,
+    /// Links leaving the site open in a new tab (`rel="noopener"` too).
+    #[serde(default)]
+    pub external_links_target_blank: bool,
+    #[serde(default)]
+    pub external_links_no_follow: bool,
+    #[serde(default)]
+    pub external_links_no_referrer: bool,
 }
 
 impl Default for Markdown {
@@ -200,6 +210,28 @@ impl Default for Markdown {
             smart_punctuation: false,
             highlight: true,
             highlight_theme: default_highlight_theme(),
+            math: false,
+            external_links_target_blank: false,
+            external_links_no_follow: false,
+            external_links_no_referrer: false,
+        }
+    }
+}
+
+impl Config {
+    /// How markdown renders on this site, before any page's overrides.
+    pub fn render_options(&self) -> crate::markdown::RenderOptions {
+        crate::markdown::RenderOptions {
+            smart_punctuation: self.markdown.smart_punctuation,
+            highlight: self.markdown.highlight,
+            anchor_mode: self.slugify.anchors,
+            math: self.markdown.math,
+            external_links: crate::markdown::ExternalLinks {
+                target_blank: self.markdown.external_links_target_blank,
+                no_follow: self.markdown.external_links_no_follow,
+                no_referrer: self.markdown.external_links_no_referrer,
+            },
+            base_url: self.base_url.clone(),
         }
     }
 }
@@ -755,6 +787,25 @@ mod tests {
         assert_eq!(config.publish[0].files, vec!["**/*".to_owned()]);
         let none = format!("{MINIMAL}[[publish]]\nfrom = \"x\"\nto = \"y\"\nfiles = []\n");
         assert!(error_of(&none).contains("lists no files"));
+    }
+
+    #[test]
+    fn markdown_options_come_from_the_config() {
+        let defaults = parse(MINIMAL).unwrap().render_options();
+        assert!(!defaults.math);
+        assert!(!defaults.external_links.target_blank);
+        assert!(!defaults.external_links.no_follow);
+        assert!(!defaults.external_links.no_referrer);
+        let text = format!(
+            "{MINIMAL}[markdown]\nmath = true\nexternal_links_target_blank = true\nexternal_links_no_follow = true\nexternal_links_no_referrer = true\n"
+        );
+        let config = parse(&text).unwrap();
+        let options = config.render_options();
+        assert!(options.math);
+        assert!(options.external_links.target_blank);
+        assert!(options.external_links.no_follow);
+        assert!(options.external_links.no_referrer);
+        assert_eq!(options.base_url, config.base_url);
     }
 
     #[test]

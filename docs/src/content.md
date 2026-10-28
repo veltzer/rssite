@@ -43,6 +43,7 @@ aliases = ["/old/url/", "/legacy/file.html"]
 translation_key = "shared"     # see Translations
 body_from = "en"               # see Translations
 smart_punctuation = true       # overrides the config for this page
+math = true                    # overrides the config for this page, see Markdown
 
 [taxonomies]
 tags = ["religion", "ethics"]  # every taxonomy must be declared in rssite.toml
@@ -52,7 +53,7 @@ anything = "goes here"         # templates read page.extra
 +++
 ```
 
-A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `pager_aliases`, `require_translations`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
+A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `pager_aliases`, `require_translations`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation`, `math` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
 
 ## Translations
 
@@ -92,6 +93,38 @@ A markdown link to `@/blog/post.md` resolves to that post's permalink in the cur
 Headings get ids from their text (`## Heading one` becomes `heading-one`, a repeat becomes `heading-one-1`), and the page's table of contents is available to templates as `page.toc`.
 
 `<!-- more -->` in a body ends the summary; `page.summary` is the HTML before it, and feeds use it instead of the full content when present.
+
+## Markdown
+
+CommonMark, plus tables, footnotes, strikethrough, task lists, heading attributes (`## Title {#id}`) and the following.
+
+GitHub callouts: a blockquote whose first line is `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]` or `[!CAUTION]` renders as `<blockquote class="markdown-alert-note">` (and so on). rssite writes no title into it, because the word differs per language: the site's stylesheet gives each class its look and, if it wants one, its label.
+
+```markdown
+> [!WARNING]
+> This deletes the branch.
+```
+
+Definition lists: a term on one line, its definition on the next after `: `.
+
+```markdown
+Ownership
+: Every value has exactly one owner.
+```
+
+Math, when `[markdown] math` or the page's `math` is on: `$…$` becomes `<span class="math math-inline">` and `$$…$$` becomes `<span class="math math-display">`, the TeX inside escaped and otherwise untouched. A renderer on the page (KaTeX's auto-render, MathJax) turns them into formulas. It is off by default because with it on, two dollar amounts in one sentence are a formula.
+
+Code blocks take options after the language, separated by commas, in zola's syntax:
+
+````markdown
+```rust,linenos,linenostart=10,hl_lines=1 3-4
+fn main() {}
+```
+````
+
+`linenos` numbers the lines (from `linenostart`, default 1), and `hl_lines` marks lines of the block, counted from 1 whatever `linenostart` says. Each line then becomes `<span class="line">`, with `hl` added on a marked line and `data-line="N"` when numbered; `highlight.css` styles them, and a site without highlighting styles the same classes itself. The numbers are drawn by CSS, so copying the code does not copy them. A malformed `hl_lines`, or one naming a line past the end of the block, is an error. Other options, such as mdBook's `ignore`, are left alone, and a block without options renders exactly as before.
+
+Links that leave the site, absolute `http` or `https` URLs outside `base_url`, can get `target="_blank"` (with `rel="noopener"`), `rel="nofollow"` and `rel="noreferrer"`, each switched on in `[markdown]`. Links in raw HTML are left as they are.
 
 ## Sorting and pagination
 

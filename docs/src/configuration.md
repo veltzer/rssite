@@ -61,6 +61,10 @@ anchors = "safe"
 smart_punctuation = false  # a page or section can override this
 highlight = true           # build-time syntax highlighting, CSS in highlight.css
 highlight_theme = "InspiredGitHub"
+math = false               # $…$ and $$…$$ as math; a page or section can override this
+external_links_target_blank = false  # links leaving the site open in a new tab
+external_links_no_follow = false     # rel="nofollow" on them
+external_links_no_referrer = false   # rel="noreferrer" on them
 
 [feeds]
 limit = 20                 # newest entries per feed

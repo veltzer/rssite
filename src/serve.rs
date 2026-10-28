@@ -1,6 +1,8 @@
 //! `rssite serve`: the real build, served from the real output directory by
 //! a plain static file server, rebuilt when a source changes. Nothing is
-//! injected into the pages: what is served is what would be deployed.
+//! injected into the files: what is on disk is what would be deployed. With
+//! live reload on, an HTML response carries one more `<script>`, which polls
+//! the build generation and reloads the page when a rebuild succeeded.
 
 use crate::config::Config;
 use anyhow::{Context, Result};
@@ -8,16 +10,23 @@ use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
-pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
+/// Where the reload script asks for the build generation. Not a path any
+/// site writes.
+const GENERATION_PATH: &str = "/__rssite/generation";
+
+pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("site root {}", root.display()))?;
     let config = Config::load(&root)?;
     let initial_output_dir = root.join(&config.output_dir);
     let output_dir = Arc::new(RwLock::new(initial_output_dir.clone()));
+    // Bumped by every successful rebuild; open pages reload when it moves.
+    let generation = Arc::new(AtomicU64::new(0));
     build(&root, drafts);
     let listener = TcpListener::bind(("127.0.0.1", port))
         .with_context(|| format!("binding 127.0.0.1:{port}"))?;
@@ -28,6 +37,7 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
     if watch {
         let root = root.clone();
         let output_dir = Arc::clone(&output_dir);
+        let generation = Arc::clone(&generation);
         std::thread::spawn(move || {
             let mut current_config = config;
             let mut last = site_fingerprint(&root, &current_config);
@@ -42,7 +52,9 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
                 let now = site_fingerprint(&root, &current_config);
                 if now != last {
                     println!("change detected, rebuilding");
-                    build(&root, drafts);
+                    if build(&root, drafts) {
+                        generation.fetch_add(1, Ordering::SeqCst);
+                    }
                     if let Ok(reloaded) = Config::load(&root) {
                         if let Ok(mut out) = output_dir.write() {
                             *out = root.join(&reloaded.output_dir);
@@ -57,26 +69,61 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool) -> Result<()> {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let dir = output_dir.read().expect("output_dir lock").clone();
+        let generation = reload.then(|| generation.load(Ordering::SeqCst));
         std::thread::spawn(move || {
-            let _ = handle(stream, &dir);
+            let _ = handle(stream, &dir, generation);
         });
     }
     Ok(())
 }
 
-fn build(root: &Path, drafts: bool) {
+/// Build once; false when the build failed (the error is printed).
+fn build(root: &Path, drafts: bool) -> bool {
     let options = crate::render::Options {
         print_plan: false,
         verify_determinism: false,
         write: true,
     };
     match crate::render::run(root, drafts, &options) {
-        Ok(report) => println!(
-            "built {} files ({} written, {} unchanged)",
-            report.outputs, report.written, report.unchanged
-        ),
-        Err(error) => eprintln!("build failed: {error:#}"),
+        Ok(report) => {
+            println!(
+                "built {} files ({} written, {} unchanged)",
+                report.outputs, report.written, report.unchanged
+            );
+            true
+        }
+        Err(error) => {
+            eprintln!("build failed: {error:#}");
+            false
+        }
     }
+}
+
+/// The live reload script for a page served at `generation`: it polls
+/// [`GENERATION_PATH`] and reloads once the number differs. A stopped server
+/// is a failed fetch, ignored; a restarted one counts from 0 again, which
+/// differs, so the page reloads when it is back.
+fn reload_script(generation: u64) -> String {
+    format!(
+        "<script>(function(){{var g=\"{generation}\";setInterval(function(){{\
+fetch(\"{GENERATION_PATH}\",{{cache:\"no-store\"}}).then(function(r){{return r.text()}})\
+.then(function(t){{if(t!==g)location.reload()}}).catch(function(){{}})}},1000)}})();</script>"
+    )
+}
+
+/// `body` with `script` before its last `</body>`, or at its end when it has
+/// none.
+fn inject(body: &[u8], script: &str) -> Vec<u8> {
+    let lower = body.to_ascii_lowercase();
+    let at = lower
+        .windows(7)
+        .rposition(|w| w == b"</body>")
+        .unwrap_or(body.len());
+    let mut out = Vec::with_capacity(body.len() + script.len());
+    out.extend_from_slice(&body[..at]);
+    out.extend_from_slice(script.as_bytes());
+    out.extend_from_slice(&body[at..]);
+    out
 }
 
 fn watched_dirs(root: &Path, config: &Config) -> Vec<PathBuf> {
@@ -224,7 +271,9 @@ fn resolve(dir: &Path, request_path: &str) -> Option<PathBuf> {
     if target.is_file() { Some(target) } else { None }
 }
 
-fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
+/// Serve one request. `generation` is the current build generation when live
+/// reload is on: HTML responses then carry the reload script.
+fn handle(mut stream: TcpStream, dir: &Path, generation: Option<u64>) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -244,6 +293,22 @@ fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
             method == "HEAD",
         );
     }
+    if let Some(current) = generation
+        && request_path.split('?').next() == Some(GENERATION_PATH)
+    {
+        let body = current.to_string();
+        return respond(
+            &mut stream,
+            "200 OK",
+            "text/plain; charset=utf-8",
+            body.as_bytes(),
+            method == "HEAD",
+        );
+    }
+    let with_reload = |kind: &str, body: Vec<u8>| match generation {
+        Some(current) if kind.starts_with("text/html") => inject(&body, &reload_script(current)),
+        _ => body,
+    };
     // A directory URL without a trailing slash would make relative links
     // resolve against the parent; redirect like a real static host does.
     let bare = request_path.split('?').next().unwrap_or("/");
@@ -258,13 +323,9 @@ fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
         Some(path) => {
             let mut body = Vec::new();
             std::fs::File::open(&path)?.read_to_end(&mut body)?;
-            respond(
-                &mut stream,
-                "200 OK",
-                content_type(&path),
-                &body,
-                method == "HEAD",
-            )
+            let kind = content_type(&path);
+            let body = with_reload(kind, body);
+            respond(&mut stream, "200 OK", kind, &body, method == "HEAD")
         }
         None => {
             let not_found = dir.join("404.html");
@@ -274,6 +335,7 @@ fn handle(mut stream: TcpStream, dir: &Path) -> std::io::Result<()> {
             } else {
                 "text/plain; charset=utf-8"
             };
+            let body = with_reload(kind, body);
             respond(&mut stream, "404 Not Found", kind, &body, method == "HEAD")
         }
     }
@@ -300,6 +362,18 @@ fn respond(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reload_script_goes_before_the_last_body_end() {
+        let script = reload_script(7);
+        assert!(script.contains("var g=\"7\""), "{script}");
+        assert!(script.contains(GENERATION_PATH), "{script}");
+        assert_eq!(
+            inject(b"<p></body>x</BODY></html>", "<s>"),
+            b"<p></body>x<s></BODY></html>"
+        );
+        assert_eq!(inject(b"<p>no end", "<s>"), b"<p>no end<s>");
+    }
 
     #[test]
     fn decodes_percent_sequences() {

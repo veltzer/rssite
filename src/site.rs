@@ -187,6 +187,14 @@ pub fn reads_other_pages(text: &str) -> bool {
     re.is_match(text)
 }
 
+/// A page's or section's front matter settings that replace the site's
+/// `[markdown]` ones for its body; `None` keeps the site's.
+#[derive(Clone, Copy)]
+struct Overrides {
+    smart: Option<bool>,
+    math: Option<bool>,
+}
+
 pub struct Site {
     pub root: PathBuf,
     pub config: Config,
@@ -1199,11 +1207,12 @@ impl Site {
         None
     }
 
-    fn render_options(&self, smart: Option<bool>) -> RenderOptions {
+    fn render_options(&self, overrides: Overrides) -> RenderOptions {
+        let site = self.config.render_options();
         RenderOptions {
-            smart_punctuation: smart.unwrap_or(self.config.markdown.smart_punctuation),
-            highlight: self.config.markdown.highlight,
-            anchor_mode: self.config.slugify.anchors,
+            smart_punctuation: overrides.smart.unwrap_or(site.smart_punctuation),
+            math: overrides.math.unwrap_or(site.math),
+            ..site
         }
     }
 
@@ -1214,12 +1223,13 @@ impl Site {
             let lang = self.pages[i].file.lang.clone();
             let body_kind = self.pages[source].file.body_kind;
             let body = self.pages[source].file.body.clone();
-            let smart = self.pages[i]
-                .front
-                .smart_punctuation
-                .or(self.pages[source].front.smart_punctuation);
+            let (page, from) = (&self.pages[i].front, &self.pages[source].front);
+            let overrides = Overrides {
+                smart: page.smart_punctuation.or(from.smart_punctuation),
+                math: page.math.or(from.math),
+            };
             let (rendered, links) = self
-                .render_body(body_kind, &body, &lang, smart)
+                .render_body(body_kind, &body, &lang, overrides)
                 .with_context(|| format!("content file {}", self.pages[i].file.rel))?;
             self.pages[i].rendered = rendered;
             self.pages[i].link_sources = links
@@ -1233,12 +1243,13 @@ impl Site {
                 continue;
             };
             let lang = self.sections[i].lang.clone();
-            let smart = self.sections[i]
-                .front
-                .smart_punctuation
-                .or(self.sections[source].front.smart_punctuation);
+            let (section, from) = (&self.sections[i].front, &self.sections[source].front);
+            let overrides = Overrides {
+                smart: section.smart_punctuation.or(from.smart_punctuation),
+                math: section.math.or(from.math),
+            };
             let (rendered, links) = self
-                .render_body(file.body_kind, &file.body, &lang, smart)
+                .render_body(file.body_kind, &file.body, &lang, overrides)
                 .with_context(|| format!("content file {}", file.rel))?;
             self.sections[i].rendered = rendered;
             self.sections[i].link_sources = links
@@ -1254,11 +1265,11 @@ impl Site {
         kind: BodyKind,
         body: &str,
         lang: &str,
-        smart: Option<bool>,
+        overrides: Overrides,
     ) -> Result<(Rendered, Vec<String>)> {
         match kind {
             BodyKind::Markdown => {
-                let options = self.render_options(smart);
+                let options = self.render_options(overrides);
                 let resolve = |path: &str| {
                     self.resolve_content_path(path, lang)
                         .map(|(permalink, _)| permalink)

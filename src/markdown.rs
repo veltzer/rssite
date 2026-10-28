@@ -1,16 +1,20 @@
-//! Markdown to HTML: CommonMark with tables, footnotes, strikethrough and
-//! task lists; heading ids and a table of contents; build-time syntax
-//! highlighting; `@/` links to other content resolved to permalinks, with a
-//! broken link a hard error.
+//! Markdown to HTML: CommonMark with tables, footnotes, strikethrough, task
+//! lists, definition lists, GitHub callouts and (opt-in) math; heading ids
+//! and a table of contents; build-time syntax highlighting with optional line
+//! numbers and highlighted lines; `@/` links to other content resolved to
+//! permalinks, with a broken link a hard error; optional `rel`/`target` on
+//! links that leave the site.
 
 use crate::slug::{SlugMode, slugify};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
-use syntect::html::{ClassStyle, ClassedHTMLGenerator, css_for_theme_with_class_style};
-use syntect::parsing::SyntaxSet;
+use syntect::html::{
+    ClassStyle, ClassedHTMLGenerator, css_for_theme_with_class_style, line_tokens_to_classed_spans,
+};
+use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
 pub const SUMMARY_MARKER: &str = "<!-- more -->";
 
@@ -37,6 +41,27 @@ pub struct RenderOptions {
     pub smart_punctuation: bool,
     pub highlight: bool,
     pub anchor_mode: SlugMode,
+    /// `$…$` and `$$…$$` become `<span class="math math-inline">` and
+    /// `<span class="math math-display">` for a client-side renderer.
+    pub math: bool,
+    pub external_links: ExternalLinks,
+    /// Links under this URL are the site's own, never external.
+    pub base_url: String,
+}
+
+/// What a markdown link that leaves the site gets.
+#[derive(Clone, Debug, Default)]
+pub struct ExternalLinks {
+    /// `target="_blank"`, with `rel="noopener"`.
+    pub target_blank: bool,
+    pub no_follow: bool,
+    pub no_referrer: bool,
+}
+
+impl ExternalLinks {
+    fn any(&self) -> bool {
+        self.target_blank || self.no_follow || self.no_referrer
+    }
 }
 
 /// Resolves an `@/...` content path to a permalink; `None` when no such
@@ -63,10 +88,157 @@ pub fn highlight_css(theme: &str) -> Result<String> {
                 .join(", ")
         );
     };
-    Ok(css_for_theme_with_class_style(theme, ClassStyle::Spaced)?)
+    let mut css = css_for_theme_with_class_style(theme, ClassStyle::Spaced)?;
+    let mark = theme
+        .settings
+        .line_highlight
+        .map(|c| {
+            format!(
+                "rgba({}, {}, {}, {:.3})",
+                c.r,
+                c.g,
+                c.b,
+                f32::from(c.a) / 255.0
+            )
+        })
+        .unwrap_or_else(|| "rgba(255, 220, 0, 0.25)".to_owned());
+    css.push_str(&format!(
+        "\n/* Code block lines, present only with linenos or hl_lines. */\n\
+         pre code .line {{ display: block; }}\n\
+         pre code .line.hl {{ background-color: {mark}; }}\n\
+         pre code .line[data-line]::before {{ content: attr(data-line); display: inline-block; \
+         min-width: 3ch; margin-inline-end: 1.5ch; text-align: end; opacity: 0.5; user-select: none; }}\n"
+    ));
+    Ok(css)
 }
 
-fn highlight(code: &str, lang: &str) -> Result<String> {
+/// A fenced code block's info string: the language, then comma-separated
+/// options. `linenos`, `linenostart=N` and `hl_lines=1 3-5` are read; any
+/// other option (mdBook's `ignore`, a `title=`) is left alone.
+#[derive(Debug, Default, PartialEq)]
+struct Fence {
+    lang: String,
+    linenos: bool,
+    linenostart: usize,
+    hl_lines: BTreeSet<usize>,
+}
+
+impl Fence {
+    fn parse(info: &str) -> Result<Fence> {
+        let info = info.trim();
+        let (lang, rest) = match info.find([' ', '\t', ',']) {
+            Some(at) => (&info[..at], &info[at + 1..]),
+            None => (info, ""),
+        };
+        let mut fence = Fence {
+            lang: lang.to_owned(),
+            linenostart: 1,
+            ..Fence::default()
+        };
+        for option in rest.split(',').map(str::trim) {
+            if option == "linenos" {
+                fence.linenos = true;
+            } else if let Some(start) = option.strip_prefix("linenostart=") {
+                fence.linenostart =
+                    start
+                        .trim()
+                        .parse()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .with_context(|| {
+                            format!("code block {info:?}: linenostart wants a positive number")
+                        })?;
+            } else if let Some(ranges) = option.strip_prefix("hl_lines=") {
+                for range in ranges.split_whitespace() {
+                    let (from, to) = range.split_once('-').unwrap_or((range, range));
+                    let bounds = from.parse::<usize>().ok().zip(to.parse::<usize>().ok());
+                    let Some((from, to)) = bounds.filter(|(f, t)| *f > 0 && f <= t) else {
+                        bail!(
+                            "code block {info:?}: hl_lines wants line numbers like `2` or `3-5`, got {range:?}"
+                        );
+                    };
+                    fence.hl_lines.extend(from..=to);
+                }
+            }
+        }
+        Ok(fence)
+    }
+
+    /// Lines are wrapped one by one only when something needs them; a plain
+    /// block renders as it always did.
+    fn wraps_lines(&self) -> bool {
+        self.linenos || !self.hl_lines.is_empty()
+    }
+}
+
+/// `lines` (the HTML of each source line, its newline included) each in a
+/// `<span class="line">`: `hl` on the lines `hl_lines` names, `data-line`
+/// with the line's number when `linenos` is on.
+fn wrap_lines(lines: &[String], fence: &Fence) -> Result<String> {
+    if let Some(last) = fence.hl_lines.last()
+        && *last > lines.len()
+    {
+        bail!(
+            "code block {:?}: hl_lines names line {last}, but the block has {} lines",
+            fence.lang,
+            lines.len()
+        );
+    }
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str("<span class=\"line");
+        if fence.hl_lines.contains(&(i + 1)) {
+            out.push_str(" hl");
+        }
+        out.push('"');
+        if fence.linenos {
+            out.push_str(&format!(" data-line=\"{}\"", fence.linenostart + i));
+        }
+        out.push('>');
+        out.push_str(line);
+        out.push_str("</span>");
+    }
+    Ok(out)
+}
+
+/// Highlighted HTML per source line, each line closing the spans it leaves
+/// open and the next reopening them, so every line is well-formed on its own.
+fn highlighted_lines(
+    code: &str,
+    syntax: &syntect::parsing::SyntaxReference,
+) -> Result<Vec<String>> {
+    let set = syntax_set();
+    let mut state = ParseState::new(syntax);
+    let mut stack = ScopeStack::new();
+    let mut open: Vec<String> = Vec::new();
+    let mut lines = Vec::new();
+    for line in syntect::util::LinesWithEndings::from(code) {
+        let ops = state.parse_line(line, set)?;
+        let (html, _) = line_tokens_to_classed_spans(line, &ops, ClassStyle::Spaced, &mut stack)?;
+        let mut out = open.concat();
+        out.push_str(&html);
+        // syntect writes only `<span class="...">` and `</span>`; text is
+        // escaped, so every `<` starts one of the two.
+        let mut rest = html.as_str();
+        while let Some(at) = rest.find('<') {
+            rest = &rest[at..];
+            if let Some(after) = rest.strip_prefix("</span>") {
+                open.pop();
+                rest = after;
+            } else {
+                let end = rest.find('>').map_or(rest.len(), |e| e + 1);
+                open.push(rest[..end].to_owned());
+                rest = &rest[end..];
+            }
+        }
+        out.push_str(&"</span>".repeat(open.len()));
+        lines.push(out);
+    }
+    Ok(lines)
+}
+
+fn highlight(code: &str, fence: &Fence) -> Result<String> {
+    let lang = fence.lang.as_str();
     let set = syntax_set();
     let syntax = if lang.is_empty() {
         None
@@ -74,16 +246,15 @@ fn highlight(code: &str, lang: &str) -> Result<String> {
         set.find_syntax_by_token(lang)
     };
     let Some(syntax) = syntax else {
-        return Ok(format!(
-            "<pre><code{}>{}</code></pre>\n",
-            if lang.is_empty() {
-                String::new()
-            } else {
-                format!(" class=\"language-{}\"", crate::util::escape_html(lang))
-            },
-            crate::util::escape_html(code)
-        ));
+        return highlight_plain(code, fence);
     };
+    if fence.wraps_lines() {
+        return Ok(format!(
+            "<pre class=\"highlight\"><code class=\"language-{}\">{}</code></pre>\n",
+            crate::util::escape_html(lang),
+            wrap_lines(&highlighted_lines(code, syntax)?, fence)?
+        ));
+    }
     let mut generator = ClassedHTMLGenerator::new_with_class_style(syntax, set, ClassStyle::Spaced);
     for line in syntect::util::LinesWithEndings::from(code) {
         generator.parse_html_for_line_which_includes_newline(line)?;
@@ -102,9 +273,15 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_HEADING_ATTRIBUTES;
+        | Options::ENABLE_HEADING_ATTRIBUTES
+        | Options::ENABLE_DEFINITION_LIST
+        | Options::ENABLE_GFM;
     if options.smart_punctuation {
         parser_options |= Options::ENABLE_SMART_PUNCTUATION;
+    }
+    // Opt-in: with it on, two dollar amounts in one sentence are a formula.
+    if options.math {
+        parser_options |= Options::ENABLE_MATH;
     }
     let parser = Parser::new_ext(markdown, parser_options);
 
@@ -114,21 +291,16 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
     let mut headings: Vec<(u8, String, String)> = Vec::new();
     let mut used_ids: BTreeMap<String, usize> = BTreeMap::new();
     let mut heading: Option<(u8, Option<String>, String, usize)> = None;
-    let mut code: Option<(String, String)> = None;
+    let mut code: Option<(Fence, String)> = None;
 
     for event in parser {
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
-                let lang = match kind {
-                    CodeBlockKind::Fenced(info) => info
-                        .trim()
-                        .split([' ', '\t', ','])
-                        .next()
-                        .unwrap_or("")
-                        .to_owned(),
-                    CodeBlockKind::Indented => String::new(),
+                let fence = match kind {
+                    CodeBlockKind::Fenced(info) => Fence::parse(&info)?,
+                    CodeBlockKind::Indented => Fence::parse("")?,
                 };
-                code = Some((lang, String::new()));
+                code = Some((fence, String::new()));
             }
             Event::Text(text) if code.is_some() => {
                 if let Some((_, buffer)) = code.as_mut() {
@@ -136,12 +308,12 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
-                let (lang, buffer) = code.take().expect("code block was opened");
+                let (fence, buffer) = code.take().expect("code block was opened");
                 word_count += buffer.split_whitespace().count();
                 let html = if options.highlight {
-                    highlight(&buffer, &lang)?
+                    highlight(&buffer, &fence)?
                 } else {
-                    highlight_plain(&buffer, &lang)
+                    highlight_plain(&buffer, &fence)?
                 };
                 events.push(Event::Html(CowStr::from(html)));
             }
@@ -192,12 +364,21 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
                 id,
             }) => {
                 let dest = resolve_dest(&dest_url, resolve, &mut links)?;
-                events.push(Event::Start(Tag::Link {
-                    link_type,
-                    dest_url: CowStr::from(dest),
-                    title,
-                    id,
-                }));
+                if options.external_links.any() && is_external(&dest, &options.base_url) {
+                    // The writer still closes it: `TagEnd::Link` is `</a>`.
+                    events.push(Event::InlineHtml(CowStr::from(external_link_open(
+                        &dest,
+                        &title,
+                        &options.external_links,
+                    ))));
+                } else {
+                    events.push(Event::Start(Tag::Link {
+                        link_type,
+                        dest_url: CowStr::from(dest),
+                        title,
+                        id,
+                    }));
+                }
             }
             Event::Start(Tag::Image {
                 link_type,
@@ -247,16 +428,66 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
     })
 }
 
-fn highlight_plain(code: &str, lang: &str) -> String {
+fn highlight_plain(code: &str, fence: &Fence) -> Result<String> {
+    let lang = fence.lang.as_str();
     let class = if lang.is_empty() {
         String::new()
     } else {
         format!(" class=\"language-{}\"", crate::util::escape_html(lang))
     };
-    format!(
-        "<pre><code{class}>{}</code></pre>\n",
+    let body = if fence.wraps_lines() {
+        let lines: Vec<String> = syntect::util::LinesWithEndings::from(code)
+            .map(crate::util::escape_html)
+            .collect();
+        wrap_lines(&lines, fence)?
+    } else {
         crate::util::escape_html(code)
-    )
+    };
+    Ok(format!("<pre><code{class}>{body}</code></pre>\n"))
+}
+
+/// A link that leaves the site: an absolute http(s) URL outside `base_url`.
+fn is_external(dest: &str, base_url: &str) -> bool {
+    let lower = dest.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return false;
+    }
+    let own = !base_url.is_empty()
+        && dest
+            .strip_prefix(base_url)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?', '#']));
+    !own
+}
+
+/// The opening `<a>` of an external link, written by hand because the HTML
+/// writer has no way to add attributes.
+fn external_link_open(dest: &str, title: &str, links: &ExternalLinks) -> String {
+    let mut out = String::from("<a href=\"");
+    pulldown_cmark_escape::escape_href(&mut out, dest).expect("writing to a String");
+    out.push('"');
+    if !title.is_empty() {
+        out.push_str(" title=\"");
+        pulldown_cmark_escape::escape_html(&mut out, title).expect("writing to a String");
+        out.push('"');
+    }
+    let mut rel = Vec::new();
+    if links.target_blank {
+        rel.push("noopener");
+    }
+    if links.no_follow {
+        rel.push("nofollow");
+    }
+    if links.no_referrer {
+        rel.push("noreferrer");
+    }
+    if !rel.is_empty() {
+        out.push_str(&format!(" rel=\"{}\"", rel.join(" ")));
+    }
+    if links.target_blank {
+        out.push_str(" target=\"_blank\"");
+    }
+    out.push('>');
+    out
 }
 
 fn resolve_dest(dest: &str, resolve: &LinkResolver, links: &mut Vec<String>) -> Result<String> {
@@ -307,6 +538,9 @@ mod tests {
             smart_punctuation: false,
             highlight: false,
             anchor_mode: SlugMode::Safe,
+            math: false,
+            external_links: ExternalLinks::default(),
+            base_url: "https://x".to_owned(),
         }
     }
 
@@ -690,6 +924,231 @@ mod tests {
         assert_eq!(json[0]["id"], "t");
         assert_eq!(json[0]["level"], 1);
         assert_eq!(json[0]["children"][0]["title"], "U");
+    }
+
+    #[test]
+    fn callouts_become_classed_blockquotes() {
+        let out = render(
+            "> [!NOTE]\n> Read this.\n\n> [!WARNING]\n> Careful.\n\n> plain quote\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert!(
+            out.html
+                .contains("<blockquote class=\"markdown-alert-note\">"),
+            "{}",
+            out.html
+        );
+        assert!(out.html.contains("<p>Read this.</p>"), "{}", out.html);
+        assert!(
+            out.html
+                .contains("<blockquote class=\"markdown-alert-warning\">"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<blockquote>\n<p>plain quote</p>"),
+            "{}",
+            out.html
+        );
+    }
+
+    #[test]
+    fn definition_lists_render() {
+        let out = render("Term\n: The definition.\n", &opts(), &no_links).unwrap();
+        assert!(
+            out.html
+                .contains("<dl>\n<dt>Term</dt>\n<dd>The definition.</dd>\n</dl>"),
+            "{}",
+            out.html
+        );
+    }
+
+    #[test]
+    fn math_is_opt_in() {
+        let text = "It cost $5 and then $x^2$ more.\n\n$$\\sum_i i$$\n";
+        let plain = render(text, &opts(), &no_links).unwrap();
+        assert!(!plain.html.contains("class=\"math"), "{}", plain.html);
+        assert!(plain.html.contains("$x^2$"), "{}", plain.html);
+        let math = RenderOptions {
+            math: true,
+            ..opts()
+        };
+        let out = render(text, &math, &no_links).unwrap();
+        assert!(
+            out.html
+                .contains("<span class=\"math math-inline\">x^2</span>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html
+                .contains("<span class=\"math math-display\">\\sum_i i</span>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("cost $5 and"),
+            "a lone dollar stays text:\n{}",
+            out.html
+        );
+    }
+
+    #[test]
+    fn external_links_get_rel_and_target_when_asked() {
+        let text = "[out](https://e.org/a?b=1&c=2 \"T <x>\") [own](https://x/en/) [sub](https://xy.org/) <https://auto.org/> [rel](other/) [mail](mailto:a@b) [in](@/a.md)";
+        let resolve = |path: &str| (path == "a.md").then(|| "https://x/en/a/".to_owned());
+        let untouched = render(text, &opts(), &resolve).unwrap();
+        assert!(
+            !untouched.html.contains("rel="),
+            "off by default:\n{}",
+            untouched.html
+        );
+        let all = RenderOptions {
+            external_links: ExternalLinks {
+                target_blank: true,
+                no_follow: true,
+                no_referrer: true,
+            },
+            ..opts()
+        };
+        let out = render(text, &all, &resolve).unwrap();
+        assert!(
+            out.html.contains("<a href=\"https://e.org/a?b=1&amp;c=2\" title=\"T &lt;x&gt;\" rel=\"noopener nofollow noreferrer\" target=\"_blank\">out</a>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"https://xy.org/\" rel="),
+            "a host that only starts like base_url is external:\n{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"https://auto.org/\" rel="),
+            "autolinks too:\n{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"https://x/en/\">own</a>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"other/\">rel</a>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"mailto:a@b\">mail</a>"),
+            "{}",
+            out.html
+        );
+        assert!(
+            out.html.contains("<a href=\"https://x/en/a/\">in</a>"),
+            "a resolved content link is the site's own:\n{}",
+            out.html
+        );
+        let nofollow = RenderOptions {
+            external_links: ExternalLinks {
+                no_follow: true,
+                ..ExternalLinks::default()
+            },
+            ..opts()
+        };
+        let out = render("[o](http://e.org/)", &nofollow, &no_links).unwrap();
+        assert_eq!(
+            out.html,
+            "<p><a href=\"http://e.org/\" rel=\"nofollow\">o</a></p>\n"
+        );
+    }
+
+    #[test]
+    fn fence_options_parse() {
+        let fence = Fence::parse("rust,linenos,hl_lines=1 3-5,linenostart=10").unwrap();
+        assert_eq!(fence.lang, "rust");
+        assert!(fence.linenos);
+        assert_eq!(fence.linenostart, 10);
+        assert_eq!(fence.hl_lines, BTreeSet::from([1, 3, 4, 5]));
+        let plain = Fence::parse("rust,ignore").unwrap();
+        assert!(!plain.wraps_lines(), "unknown options are left alone");
+        assert_eq!(Fence::parse("").unwrap().lang, "");
+        for bad in [
+            "rust,hl_lines=x",
+            "rust,hl_lines=5-3",
+            "rust,hl_lines=0",
+            "rust,linenostart=0",
+        ] {
+            assert!(Fence::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn plain_code_lines_number_and_highlight() {
+        let out = render(
+            "```text,linenos,hl_lines=2\na\nb < c\n```\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert_eq!(
+            out.html,
+            "<pre><code class=\"language-text\"><span class=\"line\" data-line=\"1\">a\n</span><span class=\"line hl\" data-line=\"2\">b &lt; c\n</span></code></pre>\n"
+        );
+        let out = render("```\nx\ny\n```\n", &opts(), &no_links).unwrap();
+        assert_eq!(
+            out.html, "<pre><code>x\ny\n</code></pre>\n",
+            "no options, no wrapping"
+        );
+        let error = render("```text,hl_lines=3\na\nb\n```\n", &opts(), &no_links).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("hl_lines names line 3, but the block has 2 lines"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn highlighted_lines_are_each_well_formed() {
+        let highlighted = RenderOptions {
+            highlight: true,
+            ..opts()
+        };
+        let out = render(
+            "```rust,hl_lines=2\nlet a = 1; /* one\ntwo */ let b = \"<s>\";\n```\n",
+            &highlighted,
+            &no_links,
+        )
+        .unwrap();
+        let code = out
+            .html
+            .strip_prefix("<pre class=\"highlight\"><code class=\"language-rust\">")
+            .and_then(|h| h.strip_suffix("</code></pre>\n"))
+            .unwrap_or_else(|| panic!("{}", out.html));
+        let lines: Vec<&str> = code.split("<span class=\"line").skip(1).collect();
+        assert_eq!(lines.len(), 2, "{code}");
+        assert!(lines[1].starts_with(" hl\">"), "{code}");
+        for line in &lines {
+            let opens = line.matches("<span").count() + 1;
+            assert_eq!(opens, line.matches("</span>").count(), "balanced: {line}");
+        }
+        assert!(
+            lines[1].contains("comment"),
+            "the comment's span is reopened on its second line:\n{code}"
+        );
+        assert!(code.contains("&lt;s&gt;"), "{code}");
+    }
+
+    #[test]
+    fn highlight_css_styles_the_lines() {
+        let css = highlight_css("InspiredGitHub").unwrap();
+        assert!(css.contains("pre code .line { display: block; }"), "{css}");
+        assert!(
+            css.contains("pre code .line.hl { background-color:"),
+            "{css}"
+        );
+        assert!(css.contains("content: attr(data-line)"), "{css}");
     }
 
     #[test]

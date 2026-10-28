@@ -104,6 +104,8 @@ pub struct PageFront {
     pub body_from: Option<String>,
     #[serde(default)]
     pub smart_punctuation: Option<bool>,
+    #[serde(default)]
+    pub math: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -147,6 +149,8 @@ pub struct SectionFront {
     pub archive_template: Option<String>,
     #[serde(default)]
     pub smart_punctuation: Option<bool>,
+    #[serde(default)]
+    pub math: Option<bool>,
     /// A redirect per pager: `"/page/{n}/"` writes `/page/2/` sending the
     /// reader to this section's second pager, for every pager it has.
     #[serde(default)]
@@ -509,7 +513,7 @@ mod tests {
     #[test]
     fn page_front_matter_fields_parse() {
         let table: toml::Table = toml::from_str(
-            "title = \"T\"\ndescription = \"D\"\nslug = \"s\"\ntemplate = \"t.html\"\ndraft = true\nweight = 3\naliases = [\"/a/\"]\ntranslation_key = \"k\"\nbody_from = \"he\"\nsmart_punctuation = true\n[taxonomies]\ntags = [\"a\", \"b\"]\n[extra]\nx = 1\n",
+            "title = \"T\"\ndescription = \"D\"\nslug = \"s\"\ntemplate = \"t.html\"\ndraft = true\nweight = 3\naliases = [\"/a/\"]\ntranslation_key = \"k\"\nbody_from = \"he\"\nsmart_punctuation = true\nmath = true\n[taxonomies]\ntags = [\"a\", \"b\"]\n[extra]\nx = 1\n",
         )
         .unwrap();
         let parsed = parse_page_front(table).unwrap();
@@ -524,6 +528,7 @@ mod tests {
         assert_eq!(front.translation_key.as_deref(), Some("k"));
         assert_eq!(front.body_from.as_deref(), Some("he"));
         assert_eq!(front.smart_punctuation, Some(true));
+        assert_eq!(front.math, Some(true));
         assert_eq!(
             front.taxonomies["tags"],
             vec!["a".to_owned(), "b".to_owned()]

@@ -14,6 +14,8 @@ clap = { version = "4", features = ["derive"] }
 deunicode = "1"
 grass = { version = "0.13", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# The HTML writer's own escaping, for the external links rssite writes itself.
+pulldown-cmark-escape = "0.11"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

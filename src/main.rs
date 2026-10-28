@@ -69,6 +69,9 @@ enum Commands {
         /// Do not watch for changes
         #[arg(long)]
         no_watch: bool,
+        /// Do not reload open pages in the browser after a rebuild
+        #[arg(long)]
+        no_reload: bool,
     },
     /// Write a minimal working site into a directory
     Init {
@@ -150,7 +153,17 @@ fn run(cli: Cli) -> Result<()> {
             eprintln!("removed {removed} files");
             Ok(())
         }
-        Commands::Serve { port, no_watch } => serve::serve(&cli.root, cli.drafts, port, !no_watch),
+        Commands::Serve {
+            port,
+            no_watch,
+            no_reload,
+        } => serve::serve(
+            &cli.root,
+            cli.drafts,
+            port,
+            !no_watch,
+            !no_watch && !no_reload,
+        ),
         Commands::Init { dir } => {
             let dir = dir.unwrap_or_else(|| cli.root.clone());
             let written = init::init(&dir)?;

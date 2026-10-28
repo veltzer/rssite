@@ -824,3 +824,26 @@ fn get_url_fragments_optional_load_data_and_markdown_filter_options_work() {
     );
     assert!(html.contains("a \u{2013} b"), "{html}");
 }
+
+#[test]
+fn math_is_a_site_setting_a_page_can_override() {
+    let dir = site("math");
+    write(
+        &dir,
+        "content/blog/formula.en.md",
+        "+++\ntitle = \"Formula\"\ndate = 2026-01-02\nmath = true\n+++\n\nArea $\\pi r^2$.\n",
+    );
+    write(
+        &dir,
+        "content/blog/prices.en.md",
+        "+++\ntitle = \"Prices\"\ndate = 2026-01-03\n+++\n\nFrom $5 to $10.\n",
+    );
+    assert!(run(&dir, &["build"]).ok);
+    let formula = read(&dir, "_site/en/blog/formula/index.html");
+    assert!(
+        formula.contains("<span class=\"math math-inline\">\\pi r^2</span>"),
+        "{formula}"
+    );
+    let prices = read(&dir, "_site/en/blog/prices/index.html");
+    assert!(prices.contains("From $5 to $10."), "{prices}");
+}

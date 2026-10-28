@@ -26,7 +26,7 @@ rssite build     build the site, writing only the files whose content changed
 rssite check     render every page twice without writing: templates, links, translations, determinism
 rssite query     print the parsed site as JSON
 rssite clean     remove every file the plan lists
-rssite serve     build, serve the output directory, rebuild on change
+rssite serve     build, serve the output directory, rebuild on change, reload open pages
 rssite init      write a minimal working site
 ```
 

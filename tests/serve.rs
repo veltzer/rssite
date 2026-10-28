@@ -1,7 +1,7 @@
 //! `rssite serve`, end to end: it builds, serves exactly the output
 //! directory, redirects directory URLs to their slash form, answers 404
-//! with the site's page, refuses what is not GET or HEAD, and rebuilds when
-//! a source changes.
+//! with the site's page, refuses what is not GET or HEAD, rebuilds when a
+//! source changes, and tells open pages to reload after a good rebuild.
 
 mod common;
 
@@ -34,13 +34,15 @@ fn free_port() -> u16 {
 }
 
 fn serve(dir: &Path, watch: bool) -> Server {
+    serve_with(dir, if watch { &[] } else { &["--no-watch"] })
+}
+
+fn serve_with(dir: &Path, extra: &[&str]) -> Server {
     let port = free_port();
     let mut args = vec!["serve", "--port"];
     let port_text = port.to_string();
     args.push(&port_text);
-    if !watch {
-        args.push("--no-watch");
-    }
+    args.extend_from_slice(extra);
     let child = Command::new(binary())
         .args(&args)
         .current_dir(dir)
@@ -203,10 +205,28 @@ fn serve_answers_404_with_the_site_page_and_refuses_other_methods() {
 fn serve_rebuilds_when_a_source_changes() {
     let dir = site("serve-watch");
     let server = serve(&dir, true);
+    let page = request(&server, "GET", "/en/blog/third/");
+    assert!(page.text().contains("<h1>Third post</h1>"));
+    let script = "<script>(function(){var g=\"0\";";
     assert!(
-        request(&server, "GET", "/en/blog/third/")
+        page.text().contains(script),
+        "the page carries the reload script:\n{}",
+        page.text()
+    );
+    assert!(
+        !read(&dir, "_site/en/blog/third/index.html").contains("<script>(function(){var g="),
+        "only the response, never the file"
+    );
+    assert_eq!(
+        page.header("Content-Length"),
+        Some(page.body.len().to_string().as_str())
+    );
+    assert_eq!(request(&server, "GET", "/__rssite/generation").text(), "0");
+    assert!(
+        !request(&server, "GET", "/style.css")
             .text()
-            .contains("<h1>Third post</h1>")
+            .contains("<script>"),
+        "only HTML gets it"
     );
     // Past the watcher's first fingerprint, so the change is a change.
     std::thread::sleep(Duration::from_millis(700));
@@ -230,6 +250,11 @@ fn serve_rebuilds_when_a_source_changes() {
             .contains("Third, edited"),
         "listings rebuild too"
     );
+    assert_eq!(
+        request(&server, "GET", "/__rssite/generation").text(),
+        "1",
+        "a good rebuild moves the generation"
+    );
     // A broken edit keeps serving the last good build.
     write(
         &dir,
@@ -241,6 +266,25 @@ fn serve_rebuilds_when_a_source_changes() {
         request(&server, "GET", "/en/blog/third/")
             .text()
             .contains("<h1>Third, edited</h1>")
+    );
+    assert_eq!(
+        request(&server, "GET", "/__rssite/generation").text(),
+        "1",
+        "a failed rebuild does not reload anything"
+    );
+}
+
+#[test]
+fn serve_without_reload_serves_the_files_as_they_are() {
+    let dir = site("serve-no-reload");
+    let server = serve_with(&dir, &["--no-reload"]);
+    assert_eq!(
+        request(&server, "GET", "/en/blog/third/").text(),
+        read(&dir, "_site/en/blog/third/index.html")
+    );
+    assert_eq!(
+        request(&server, "GET", "/__rssite/generation").status,
+        "404 Not Found"
     );
 }
 

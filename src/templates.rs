@@ -389,11 +389,7 @@ impl Model {
             root: site.root.clone(),
             planned,
             language_codes,
-            markdown_options: crate::markdown::RenderOptions {
-                smart_punctuation: site.config.markdown.smart_punctuation,
-                highlight: site.config.markdown.highlight,
-                anchor_mode: site.config.slugify.anchors,
-            },
+            markdown_options: site.config.render_options(),
         }
     }
 

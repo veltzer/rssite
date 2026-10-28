@@ -40,11 +40,11 @@ Running `rssite` with no command prints this list.
 | `check` | Render every page twice without writing anything: templates, links, translations, determinism |
 | `query` | Print the parsed site (pages, sections, taxonomies) as JSON |
 | `clean` | Remove every file the plan lists from the output directory |
-| `serve` | Build, serve the output directory on 127.0.0.1, rebuild when a source changes |
+| `serve` | Build, serve the output directory on 127.0.0.1, rebuild when a source changes and reload open pages |
 | `init` | Write a minimal working site |
 | `version` | Print version and build details |
 
-Two flags apply to every command: `-C <dir>` runs against a site root other than the current directory, and `--drafts` includes pages and sections marked `draft = true`. `build` takes `--plan` to print the manifest as well, and `--verify-determinism` to render everything twice and fail if any file differs.
+Two flags apply to every command: `-C <dir>` runs against a site root other than the current directory, and `--drafts` includes pages and sections marked `draft = true`. `build` takes `--plan` to print the manifest as well, and `--verify-determinism` to render everything twice and fail if any file differs. `serve` takes `--port` (default 8000), `--no-watch` to serve without rebuilding, and `--no-reload` to keep open pages from reloading after a rebuild. The reload works by adding one `<script>` to each HTML response, never to the files: what is on disk is what would be deployed.
 
 ## What a build writes
 
