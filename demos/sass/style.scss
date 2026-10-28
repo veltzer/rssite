@@ -1,0 +1,70 @@
+$width: 46rem;
+
+body {
+  max-width: $width;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+  color: #1f2328;
+}
+
+.lead {
+  color: #59636e;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 1rem;
+  background: #f6f8fa;
+  border-radius: 6px;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border: 1px solid #d1d9e0;
+  padding: 0.3rem 0.7rem;
+}
+
+dt {
+  font-weight: bold;
+}
+
+.toc,
+.pager {
+  margin: 1.5rem 0;
+}
+
+.pager a + a {
+  margin-inline-start: 1.5rem;
+}
+
+// Callouts: rssite writes <blockquote class="markdown-alert-KIND"> and no
+// label, so the label and the colour come from here.
+$callouts: (
+  note: (#0969da, "Note"),
+  tip: (#1a7f37, "Tip"),
+  important: (#8250df, "Important"),
+  warning: (#9a6700, "Warning"),
+  caution: (#d1242f, "Caution"),
+);
+
+@each $kind, $look in $callouts {
+  blockquote.markdown-alert-#{$kind} {
+    margin-inline: 0;
+    padding: 0.2rem 1rem;
+    border-inline-start: 4px solid nth($look, 1);
+
+    &::before {
+      content: nth($look, 2);
+      display: block;
+      margin-top: 0.5rem;
+      font-weight: 600;
+      color: nth($look, 1);
+    }
+  }
+}

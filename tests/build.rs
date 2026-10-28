@@ -847,3 +847,10 @@ fn math_is_a_site_setting_a_page_can_override() {
     let prices = read(&dir, "_site/en/blog/prices/index.html");
     assert!(prices.contains("From $5 to $10."), "{prices}");
 }
+
+#[test]
+fn the_demo_site_checks() {
+    let demos = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("demos");
+    let check = run(&demos, &["check"]);
+    assert!(check.ok, "demos/ no longer builds:\n{}", check.stderr);
+}

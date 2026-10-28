@@ -30,6 +30,8 @@ rssite serve     build, serve the output directory, rebuild on change, reload op
 rssite init      write a minimal working site
 ```
 
+`demos/` is a small site with a page per markdown feature (math, callouts, code blocks with line numbers, definition lists, external links, smart punctuation): `rssite -C demos serve` and open <http://127.0.0.1:8000/>.
+
 Multi-language sites are the first-class case: every language is explicit and served under its own prefix, pages pair with their translations by name or by key, taxonomy terms pair through a translation table, dates format per language, and a language declares its text direction. [Lessons from zola](docs/src/zola-problems.md) records why each of those is the way it is.
 
 ## The contract

@@ -16,6 +16,8 @@ rssite init
 rssite build
 ```
 
+To see what rssite's markdown can do before writing any, the repository's `demos/` directory is a site with one page per feature: `rssite -C demos serve`, then open <http://127.0.0.1:8000/>.
+
 `init` writes a working single-language site: `rssite.toml`, one translation file, the six templates the generator looks for, a root section, a blog section with one post, and a stylesheet. `build` renders it into `_site/`.
 
 ```text

@@ -1,0 +1,29 @@
+# A site that shows rssite's markdown features, one page each.
+#
+#   rssite -C demos serve      then open http://127.0.0.1:8000/
+#
+# base_url matches `serve`'s default port, so every link works locally. The
+# output goes to build/, which git ignores.
+base_url = "http://127.0.0.1:8000"
+title = "rssite demos"
+description = "What rssite's markdown does, one feature per page."
+author = "Mark Veltzer"
+output_dir = "build"
+
+[[languages]]
+code = "en"
+name = "English"
+direction = "ltr"
+
+[markdown]
+highlight = true
+highlight_theme = "InspiredGitHub"
+# Off here; the pages that want them turn them on in their front matter.
+math = false
+smart_punctuation = false
+# Links that leave the site open in a new tab and carry no ranking.
+external_links_target_blank = true
+external_links_no_follow = true
+
+[feeds]
+limit = 20

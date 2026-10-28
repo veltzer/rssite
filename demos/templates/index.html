@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ section.title }}</h1>
+{{ section.content | safe }}
+<ul class="demos">
+{%- for demo in section.pages %}
+  <li><a href="{{ demo.permalink }}">{{ demo.title }}</a>{% if demo.description %}: {{ demo.description }}{% endif %}</li>
+{%- endfor %}
+</ul>
+{% endblock %}

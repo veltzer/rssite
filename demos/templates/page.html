@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} &middot; {{ language.title }}{% endblock %}
+{% block content %}
+<article>
+<h1>{{ page.title }}</h1>
+{%- if page.description %}
+<p class="lead">{{ page.description }}</p>
+{%- endif %}
+{%- if page.toc and page.extra.show_toc %}
+<nav class="toc">
+  <strong>{{ trans(key="contents") }}</strong>
+  <ul>
+  {%- for h in page.toc %}
+    <li><a href="#{{ h.id }}">{{ h.title }}</a>
+    {%- if h.children %}
+      <ul>
+      {%- for c in h.children %}
+        <li><a href="#{{ c.id }}">{{ c.title }}</a></li>
+      {%- endfor %}
+      </ul>
+    {%- endif %}
+    </li>
+  {%- endfor %}
+  </ul>
+</nav>
+{%- endif %}
+{{ page.content | safe }}
+<nav class="pager">
+  {%- if page.previous %}<a href="{{ page.previous.permalink }}">&larr; {{ page.previous.title }}</a>{% endif %}
+  <a href="{{ get_url(path="@/_index.md") }}">{{ trans(key="all_demos") }}</a>
+  {%- if page.next %}<a href="{{ page.next.permalink }}">{{ page.next.title }} &rarr;</a>{% endif %}
+</nav>
+</article>
+{% endblock %}

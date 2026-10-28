@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ language.direction }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ language.title }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ get_url(path="style.css") }}">
+<link rel="stylesheet" href="{{ get_url(path="highlight.css") }}">
+{#- rssite writes math as <span class="math math-inline|math-display"> with
+    the TeX inside; KaTeX draws it in the browser. -#}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  document.querySelectorAll("span.math").forEach(function (el) {
+    katex.render(el.textContent, el, {
+      displayMode: el.classList.contains("math-display"),
+      throwOnError: false
+    });
+  });
+});
+</script>
+</head>
+<body>
+<header><a href="{{ get_url(path="@/_index.md") }}">{{ language.title }}</a></header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
