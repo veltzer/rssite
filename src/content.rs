@@ -151,6 +151,11 @@ pub struct SectionFront {
     pub smart_punctuation: Option<bool>,
     #[serde(default)]
     pub math: Option<bool>,
+    /// Front matter for every page and subsection below this one: `math`,
+    /// `smart_punctuation` and `extra`. The nearest section wins, and a
+    /// page's own front matter wins over all of them.
+    #[serde(default)]
+    pub cascade: toml::Table,
     /// A redirect per pager: `"/page/{n}/"` writes `/page/2/` sending the
     /// reader to this section's second pager, for every pager it has.
     #[serde(default)]
@@ -338,6 +343,7 @@ pub fn parse_section_front(mut table: toml::Table) -> Result<ParsedSectionFront>
     let mut front: SectionFront = toml::Value::Table(table)
         .try_into()
         .context("front matter")?;
+    check_cascade(&front.cascade)?;
     front.paginate_path = front.paginate_path.trim_matches('/').to_owned();
     if front.paginate_path.is_empty() || front.paginate_path.split('/').any(|p| p == "..") {
         bail!(
@@ -348,12 +354,93 @@ pub fn parse_section_front(mut table: toml::Table) -> Result<ParsedSectionFront>
     Ok(ParsedSectionFront { front, updated })
 }
 
+/// The keys a section's `[cascade]` may set: the ones that mean the same on
+/// every page and subsection below it. `template` is not one: a section's
+/// `page_template` already chooses its pages' template.
+pub const CASCADE_KEYS: [&str; 3] = ["math", "smart_punctuation", "extra"];
+
+fn check_cascade(cascade: &toml::Table) -> Result<()> {
+    for (key, value) in cascade {
+        let ok = match key.as_str() {
+            "math" | "smart_punctuation" => value.is_bool(),
+            "extra" => value.is_table(),
+            _ => bail!(
+                "front matter: cascade can set {}; {key:?} is not one of them",
+                CASCADE_KEYS.join(", ")
+            ),
+        };
+        if !ok {
+            bail!(
+                "front matter: cascade.{key} must be {}, found a {}",
+                if key == "extra" {
+                    "a table"
+                } else {
+                    "true or false"
+                },
+                value.type_str()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `outer` with `inner` laid over it: `inner`'s keys win, and the two
+/// `extra` tables merge key by key the same way.
+pub fn merge_cascade(outer: &toml::Table, inner: &toml::Table) -> toml::Table {
+    let mut merged = outer.clone();
+    for (key, value) in inner {
+        match (key.as_str(), merged.get_mut(key), value) {
+            ("extra", Some(toml::Value::Table(base)), toml::Value::Table(over)) => {
+                for (k, v) in over {
+                    base.insert(k.clone(), v.clone());
+                }
+            }
+            _ => {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    merged
+}
+
+/// Front matter `front` with a section's cascade filled in underneath it:
+/// what `front` sets itself stays.
+pub fn apply_cascade(front: &mut toml::Table, cascade: &toml::Table) {
+    let own = std::mem::take(front);
+    *front = merge_cascade(cascade, &own);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn langs() -> Vec<String> {
         vec!["en".into(), "he".into()]
+    }
+
+    #[test]
+    fn cascades_merge_nearest_last_with_extra_key_by_key() {
+        let outer: toml::Table = toml::from_str("math = true\n[extra]\na = 1\nb = 1\n").unwrap();
+        let inner: toml::Table =
+            toml::from_str("smart_punctuation = true\n[extra]\nb = 2\n").unwrap();
+        let merged = merge_cascade(&outer, &inner);
+        assert_eq!(merged["math"].as_bool(), Some(true));
+        assert_eq!(merged["smart_punctuation"].as_bool(), Some(true));
+        assert_eq!(merged["extra"]["a"].as_integer(), Some(1));
+        assert_eq!(
+            merged["extra"]["b"].as_integer(),
+            Some(2),
+            "the inner one wins"
+        );
+        let mut front: toml::Table =
+            toml::from_str("title = \"t\"\nmath = false\n[extra]\na = 9\n").unwrap();
+        apply_cascade(&mut front, &merged);
+        assert_eq!(front["math"].as_bool(), Some(false), "the page's own wins");
+        assert_eq!(front["extra"]["a"].as_integer(), Some(9));
+        assert_eq!(front["extra"]["b"].as_integer(), Some(2));
+        assert_eq!(front["smart_punctuation"].as_bool(), Some(true));
+        let parsed = parse_page_front(front).unwrap();
+        assert_eq!(parsed.front.math, Some(false));
     }
 
     #[test]

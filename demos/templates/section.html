@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ section.title }} &middot; {{ language.title }}{% endblock %}
+{% block content %}
+<h1>{{ section.title }}</h1>
+{{ section.content | safe }}
+<ul>
+{%- for page in section.pages %}
+  <li><a href="{{ page.permalink }}">{{ page.title }}</a>{% if page.description %}: {{ page.description }}{% endif %}</li>
+{%- endfor %}
+</ul>
+<p><a href="{{ get_url(path="@/_index.md") }}">{{ trans(key="all_demos") }}</a></p>
+{% endblock %}

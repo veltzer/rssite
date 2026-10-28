@@ -53,7 +53,7 @@ anything = "goes here"         # templates read page.extra
 +++
 ```
 
-A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `pager_aliases`, `require_translations`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation`, `math` and `extra`. A section that sorts by date and contains a page without one is an error, not a silently dropped page.
+A section index (`_index.<lang>.md`) takes `title`, `description`, `template`, `page_template`, `sort_by` (`date`, `weight`, `title`, `none`), `paginate_by`, `paginate_path`, `generate_feeds`, `year_archives`, `archive_template`, `pager_aliases`, `require_translations`, `draft`, `weight`, `aliases`, `updated`, `body_from`, `smart_punctuation`, `math`, `extra` and `cascade` (below). A section that sorts by date and contains a page without one is an error, not a silently dropped page.
 
 ## Translations
 
@@ -83,6 +83,21 @@ body_from = "en"
 `body_from` with a non-empty body, with a language the page has no translation in, or pointing at a page that itself uses `body_from`, is an error.
 
 Templates see the translations as `page.translations` (a list ordered as the languages are configured) and as `alternates` (a map from language code to permalink).
+
+A section index can set front matter for everything below it with a `[cascade]` table: every page in the section and in its subsections, at any depth, and the subsections themselves.
+
+```toml
++++
+title = "Courses"
+[cascade]
+math = true                    # every lesson below has math on
+smart_punctuation = true
+[cascade.extra]
+banner = "Part of the courses"
++++
+```
+
+A cascade can set `math`, `smart_punctuation` and `extra`, the settings that mean the same on every page below; anything else is an error naming the key. (`template` is not one of them: a section's `page_template` chooses its own pages' template.) The nearest section wins: a subsection's cascade overrides its parent's key by key, `extra` merging key by key too, and a page's own front matter overrides every cascade. The cascade does not apply to the section that declares it, whose own front matter already says what it wants. Cascades are per language, like everything in a section index: `_index.en.md`'s reaches the English pages only. A page lists the section files whose cascade it took as sources in the manifest, so editing a cascade rebuilds exactly the pages under it.
 
 `require_translations = true` on a section index makes a missing translation an error: every page of the section must exist in every language the section itself exists in, and the error names the page and the language it lacks.
 

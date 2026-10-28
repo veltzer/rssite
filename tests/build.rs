@@ -876,3 +876,159 @@ fn code_is_left_to_right_only_in_a_right_to_left_language() {
         "{en}"
     );
 }
+
+// ── section cascades ─────────────────────────────────────────────────────
+
+/// A blog that cascades math and extra, a nested course section that adds
+/// and overrides, and pages that take, override or ignore what comes down.
+fn cascade_site(name: &str) -> std::path::PathBuf {
+    let dir = site(name);
+    write(
+        &dir,
+        "content/blog/_index.en.md",
+        "+++\ntitle = \"Blog\"\nsort_by = \"date\"\n[cascade]\nmath = true\n[cascade.extra]\nbanner = \"blog\"\nseries = \"none\"\n+++\n",
+    );
+    write(
+        &dir,
+        "content/blog/course/_index.en.md",
+        "+++\ntitle = \"Course\"\nsort_by = \"date\"\n[cascade]\nsmart_punctuation = true\n[cascade.extra]\nseries = \"course\"\n+++\n",
+    );
+    write(
+        &dir,
+        "content/blog/course/lesson.en.md",
+        "+++\ntitle = \"Lesson\"\ndate = 2026-02-01\n[extra]\nlevel = 1\n+++\n\nArea $\\pi r^2$ -- done.\n",
+    );
+    write(
+        &dir,
+        "content/blog/course/plain.en.md",
+        "+++\ntitle = \"Plain\"\ndate = 2026-02-02\nmath = false\nsmart_punctuation = false\n[extra]\nbanner = \"own\"\n+++\n\nFrom $5 to $10 -- done.\n",
+    );
+    dir
+}
+
+#[test]
+fn a_section_cascade_reaches_every_page_below_it_nearest_first() {
+    let dir = cascade_site("cascade");
+    let build = run(&dir, &["build"]);
+    assert!(build.ok, "{}", build.stderr);
+    let lesson = read(&dir, "_site/en/blog/course/lesson/index.html");
+    assert!(
+        lesson.contains("<span class=\"math math-inline\">\\pi r^2</span>"),
+        "math from the blog, two levels up:\n{lesson}"
+    );
+    assert!(
+        lesson.contains("\u{2013} done."),
+        "smart punctuation from the course:\n{lesson}"
+    );
+    let plain = read(&dir, "_site/en/blog/course/plain/index.html");
+    assert!(
+        plain.contains("From $5 to $10 -- done."),
+        "the page's own settings win:\n{plain}"
+    );
+
+    let query = run(&dir, &["query"]);
+    assert!(query.ok, "{}", query.stderr);
+    let site: serde_json::Value = serde_json::from_str(&query.stdout).unwrap();
+    let extra_of = |permalink_end: &str| {
+        site["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["permalink"].as_str().unwrap().ends_with(permalink_end))
+            .unwrap_or_else(|| panic!("no page {permalink_end}"))["extra"]
+            .clone()
+    };
+    let lesson = extra_of("/en/blog/course/lesson/");
+    assert_eq!(lesson["banner"], "blog", "{lesson}");
+    assert_eq!(
+        lesson["series"], "course",
+        "the nearer section wins: {lesson}"
+    );
+    assert_eq!(lesson["level"], 1, "{lesson}");
+    assert_eq!(extra_of("/en/blog/course/plain/")["banner"], "own");
+    let first = extra_of("/en/blog/first/");
+    assert_eq!(first["series"], "none", "the blog's own page: {first}");
+    assert!(
+        extra_of("/he/blog/first/").get("banner").is_none(),
+        "a cascade is per language"
+    );
+    let course = site["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| {
+            s["permalink"]
+                .as_str()
+                .unwrap()
+                .ends_with("/en/blog/course/")
+        })
+        .unwrap();
+    assert_eq!(
+        course["extra"]["banner"], "blog",
+        "subsections receive it too"
+    );
+}
+
+#[test]
+fn a_page_depends_on_the_sections_whose_cascade_it_takes() {
+    let dir = cascade_site("cascade-sources");
+    // A template that reads no other page, so the sources are exactly the
+    // page's own and what its front matter came from.
+    write(&dir, "templates/bare.html", "{{ page.content | safe }}");
+    let lesson = read(&dir, "content/blog/course/lesson.en.md");
+    write(
+        &dir,
+        "content/blog/course/lesson.en.md",
+        &lesson.replace(
+            "date = 2026-02-01\n",
+            "date = 2026-02-01\ntemplate = \"bare.html\"\n",
+        ),
+    );
+    let plan = plan_of(&dir);
+    let sources = sources_of(&plan, "_site/en/blog/course/lesson/index.html");
+    assert!(
+        sources.contains(&"content/blog/_index.en.md".to_owned()),
+        "{sources:?}"
+    );
+    assert!(
+        sources.contains(&"content/blog/course/_index.en.md".to_owned()),
+        "{sources:?}"
+    );
+    assert!(
+        !sources.contains(&"content/blog/first.en.md".to_owned()),
+        "not everything, only the cascade's sections: {sources:?}"
+    );
+}
+
+#[test]
+fn a_cascade_sets_only_what_means_the_same_below() {
+    for (cascade, error) in [
+        (
+            "template = \"x.html\"",
+            "cascade can set math, smart_punctuation, extra; \"template\" is not one of them",
+        ),
+        (
+            "math = \"yes\"",
+            "cascade.math must be true or false, found a string",
+        ),
+        (
+            "extra = 3",
+            "cascade.extra must be a table, found a integer",
+        ),
+    ] {
+        let dir = site("cascade-bad");
+        write(
+            &dir,
+            "content/blog/_index.en.md",
+            &format!("+++\ntitle = \"Blog\"\nsort_by = \"date\"\n[cascade]\n{cascade}\n+++\n"),
+        );
+        let check = run(&dir, &["check"]);
+        assert!(!check.ok, "accepted: {cascade}");
+        assert!(
+            check.stderr.contains("content file blog/_index.en.md"),
+            "{}",
+            check.stderr
+        );
+        assert!(check.stderr.contains(error), "{}", check.stderr);
+    }
+}

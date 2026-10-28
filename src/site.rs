@@ -36,6 +36,9 @@ pub struct Page {
     pub rendered: Rendered,
     /// Content files the body links to, relative to the site root.
     pub link_sources: Vec<String>,
+    /// Section files whose `[cascade]` this page's front matter took
+    /// settings from, relative to the site root.
+    pub cascade_sources: Vec<String>,
     /// The pages of the same language sharing the most terms, best first.
     pub related: Vec<usize>,
 }
@@ -57,6 +60,12 @@ pub struct Section {
     pub body_source: Option<usize>,
     pub rendered: Rendered,
     pub link_sources: Vec<String>,
+    /// The cascade this section passes down: its ancestors' merged with its
+    /// own, nearer keys winning.
+    pub cascade_down: toml::Table,
+    /// The section files whose cascades make up `cascade_down`, relative
+    /// to the site root.
+    pub cascade_sources: Vec<String>,
 }
 
 impl Section {
@@ -469,6 +478,8 @@ impl Site {
                 body_source: None,
                 rendered: Rendered::default(),
                 link_sources: Vec::new(),
+                cascade_down: toml::Table::new(),
+                cascade_sources: Vec::new(),
             };
             let lookup_key = (file.lang.clone(), strip_lang(&file.rel, &file.lang));
             self.section_lookup.insert(lookup_key, self.sections.len());
@@ -509,6 +520,8 @@ impl Site {
                 body_source: None,
                 rendered: Rendered::default(),
                 link_sources: Vec::new(),
+                cascade_down: toml::Table::new(),
+                cascade_sources: Vec::new(),
             };
             self.section_lookup
                 .insert((code.clone(), "_index.md".to_owned()), self.sections.len());
@@ -535,7 +548,53 @@ impl Site {
             }
         }
         self.drafted_sections = drafted;
+        self.cascade_sections();
         Ok(())
+    }
+
+    /// Hand each section's `[cascade]` down the tree: parents before
+    /// children, so a section receives its ancestors' merged cascade, fills
+    /// in its own front matter from it, and passes on that merged with its
+    /// own.
+    fn cascade_sections(&mut self) {
+        let mut order: Vec<usize> = (0..self.sections.len()).collect();
+        order.sort_by_key(|&i| self.sections[i].components.len());
+        for i in order {
+            let (inherited, mut sources) = match self.sections[i].parent {
+                Some(p) => (
+                    self.sections[p].cascade_down.clone(),
+                    self.sections[p].cascade_sources.clone(),
+                ),
+                None => (toml::Table::new(), Vec::new()),
+            };
+            if !self.sections[i].front.cascade.is_empty()
+                && let Some(file) = &self.sections[i].file
+            {
+                sources.push(self.rel(&file.path));
+            }
+            let section = &mut self.sections[i];
+            if let Some(math) = inherited.get("math").and_then(toml::Value::as_bool) {
+                section.front.math.get_or_insert(math);
+            }
+            if let Some(smart) = inherited
+                .get("smart_punctuation")
+                .and_then(toml::Value::as_bool)
+            {
+                section.front.smart_punctuation.get_or_insert(smart);
+            }
+            if let Some(toml::Value::Table(extra)) = inherited.get("extra") {
+                for (k, v) in extra {
+                    section
+                        .front
+                        .extra
+                        .entry(k.clone())
+                        .or_insert_with(|| v.clone());
+                }
+            }
+            section.cascade_down =
+                crate::content::merge_cascade(&inherited, &section.front.cascade);
+            section.cascade_sources = sources;
+        }
     }
 
     /// Whether a content file in `components` is under a section index of
@@ -569,7 +628,17 @@ impl Site {
             .collect();
         let mut by_url: BTreeMap<String, String> = BTreeMap::new();
         for file in files.into_iter().filter(|f| f.kind == FileKind::Page) {
-            let parsed = content::parse_page_front(file.front.clone())
+            let mut front = file.front.clone();
+            let cascade = section_index
+                .get(&(file.lang.clone(), file.components.clone()))
+                .map(|&s| &self.sections[s]);
+            if let Some(section) = cascade {
+                content::apply_cascade(&mut front, &section.cascade_down);
+            }
+            let cascade_sources = cascade
+                .map(|s| s.cascade_sources.clone())
+                .unwrap_or_default();
+            let parsed = content::parse_page_front(front)
                 .with_context(|| format!("content file {}", file.rel))?;
             if parsed.front.draft && !self.drafts {
                 continue;
@@ -638,6 +707,7 @@ impl Site {
                 body_source: None,
                 rendered: Rendered::default(),
                 link_sources: Vec::new(),
+                cascade_sources,
                 related: Vec::new(),
                 file,
             };

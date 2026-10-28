@@ -136,6 +136,7 @@ impl Plan {
                 sources.insert(site.rel(&site.pages[source].file.path));
             }
             sources.extend(page.link_sources.iter().cloned());
+            sources.extend(page.cascade_sources.iter().cloned());
             if let Some(file) = &site.sections[page.section].file {
                 sources.insert(site.rel(&file.path));
             }
