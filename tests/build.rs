@@ -1032,3 +1032,107 @@ fn a_cascade_sets_only_what_means_the_same_below() {
         assert!(check.stderr.contains(error), "{}", check.stderr);
     }
 }
+
+// ── shortcodes ───────────────────────────────────────────────────────────
+
+fn shortcode_site(name: &str) -> std::path::PathBuf {
+    let dir = site(name);
+    write(
+        &dir,
+        "templates/shortcodes/youtube.html",
+        "<iframe class=\"yt\" data-nth=\"{{ nth }}\" src=\"https://www.youtube-nocookie.com/embed/{{ id }}{% if start %}?start={{ start }}{% endif %}\"></iframe>",
+    );
+    write(
+        &dir,
+        "templates/shortcodes/note.html",
+        "<aside class=\"note note-{{ kind }}\" lang=\"{{ lang }}\">{{ body | markdown | safe }}<small>{{ page.title }}</small></aside>",
+    );
+    write(
+        &dir,
+        "content/blog/shortcodes.en.md",
+        "+++\ntitle = \"Shortcodes\"\ndate = 2026-05-01\n+++\n\nIntro {{ youtube(id=\"abc\") }} inline.\n\n{{ youtube(id=\"def\", start=30) }}\n\n<!-- more -->\n\n{% note(kind=\"tip\") %}\nSome *markdown* here.\n{% end %}\n\nLiteral: `{{ youtube(id=\"x\") }}`\n",
+    );
+    dir
+}
+
+#[test]
+fn shortcodes_render_their_templates_where_they_are_called() {
+    let dir = shortcode_site("shortcodes");
+    let build = run(&dir, &["build"]);
+    assert!(build.ok, "{}", build.stderr);
+    let html = read(&dir, "_site/en/blog/shortcodes/index.html");
+    assert!(
+        html.contains("<p>Intro <iframe class=\"yt\" data-nth=\"1\" src=\"https://www.youtube-nocookie.com/embed/abc\"></iframe> inline.</p>"),
+        "inline call, inside its paragraph:\n{html}"
+    );
+    assert!(
+        html.contains("<iframe class=\"yt\" data-nth=\"2\" src=\"https://www.youtube-nocookie.com/embed/def?start=30\"></iframe>"),
+        "{html}"
+    );
+    assert!(
+        !html.contains("<p><iframe class=\"yt\" data-nth=\"2\""),
+        "a call alone on its line is not wrapped in a paragraph:\n{html}"
+    );
+    assert!(
+        html.contains("<aside class=\"note note-tip\" lang=\"en\"><p>Some <em>markdown</em> here.</p>\n<small>Shortcodes</small></aside>"),
+        "a body, the page and the language reach the template:\n{html}"
+    );
+    assert!(
+        html.contains("<code>{{ youtube(id=\"x\") }}</code>"),
+        "a call in code is text:\n{html}"
+    );
+    assert!(
+        !html.contains("rssite-shortcode"),
+        "no marker left:\n{html}"
+    );
+
+    // Listings and feeds carry the rendered summary, not the markers.
+    let blog = read(&dir, "_site/en/blog/atom.xml");
+    assert!(blog.contains("youtube-nocookie.com/embed/abc"), "{blog}");
+    assert!(!blog.contains("rssite-shortcode"), "{blog}");
+}
+
+#[test]
+fn a_page_depends_on_the_shortcodes_it_calls() {
+    let dir = shortcode_site("shortcode-sources");
+    let plan = plan_of(&dir);
+    let sources = sources_of(&plan, "_site/en/blog/shortcodes/index.html");
+    for template in [
+        "templates/shortcodes/youtube.html",
+        "templates/shortcodes/note.html",
+    ] {
+        assert!(
+            sources.contains(&template.to_owned()),
+            "{template}: {sources:?}"
+        );
+    }
+    let other = sources_of(&plan, "_site/en/about/index.html");
+    assert!(
+        !other.contains(&"templates/shortcodes/youtube.html".to_owned()),
+        "{other:?}"
+    );
+}
+
+#[test]
+fn calling_a_shortcode_that_does_not_exist_names_the_file_and_line() {
+    let dir = site("shortcode-unknown");
+    write(
+        &dir,
+        "content/blog/bad.en.md",
+        "+++\ntitle = \"Bad\"\ndate = 2026-03-02\n+++\n\nText.\n\n{{ gallery(dir=\"x\") }}\n",
+    );
+    let check = run(&dir, &["check"]);
+    assert!(!check.ok);
+    assert!(
+        check.stderr.contains("content file blog/bad.en.md"),
+        "{}",
+        check.stderr
+    );
+    assert!(
+        check
+            .stderr
+            .contains("line 8: no shortcode \"gallery\"; add templates/shortcodes/gallery.html"),
+        "{}",
+        check.stderr
+    );
+}

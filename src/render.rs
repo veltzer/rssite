@@ -74,6 +74,104 @@ fn base_context_from(site: &Site, model: &Model, lang: &str, current_path: &str)
     context
 }
 
+/// Copy the pages, as they now are, into the section and term listings that
+/// hold them, after a page's content changed.
+fn refresh_listings(site: &Site, model: &mut Model) {
+    for (s, section) in site.sections.iter().enumerate() {
+        model.sections[s]["pages"] = Value::Array(
+            section
+                .pages
+                .iter()
+                .map(|&p| model.pages[p].clone())
+                .collect(),
+        );
+    }
+    for (t, taxonomy) in site.taxonomies.iter().enumerate() {
+        for (term_idx, term) in taxonomy.terms.iter().enumerate() {
+            model.taxonomies[t]["terms"][term_idx]["pages"] =
+                Value::Array(term.pages.iter().map(|&p| model.pages[p].clone()).collect());
+        }
+    }
+}
+
+/// Render the shortcode calls of every markdown body and put each output
+/// where its marker is, in `content` and `summary`. The engines exist only
+/// now, which is why the calls waited.
+fn expand_shortcodes(site: &Site, model: &mut Model) -> Result<()> {
+    let any = site.pages.iter().any(|p| !p.rendered.shortcodes.is_empty())
+        || site
+            .sections
+            .iter()
+            .any(|s| !s.rendered.shortcodes.is_empty());
+    if !any {
+        return Ok(());
+    }
+    let engines = make_engines(site, &Arc::new(model.clone()))?;
+    for (i, page) in site.pages.iter().enumerate() {
+        if page.rendered.shortcodes.is_empty() {
+            continue;
+        }
+        let lang = &page.file.lang;
+        let mut context = base_context_from(site, model, lang, &page.path);
+        context.insert("page", &model.pages[i]);
+        let outputs = render_calls(&engines[lang], &page.rendered.shortcodes, &context)
+            .with_context(|| format!("content file {}", page.file.rel))?;
+        replace_markers(&mut model.pages[i], &outputs);
+    }
+    for (s, section) in site.sections.iter().enumerate() {
+        if section.rendered.shortcodes.is_empty() {
+            continue;
+        }
+        let mut context = base_context_from(site, model, &section.lang, &section.path);
+        context.insert("section", &model.sections[s]);
+        let outputs = render_calls(
+            &engines[&section.lang],
+            &section.rendered.shortcodes,
+            &context,
+        )
+        .with_context(|| format!("content file {}", section.rel().unwrap_or("(root)")))?;
+        replace_markers(&mut model.sections[s], &outputs);
+    }
+    refresh_listings(site, model);
+    Ok(())
+}
+
+/// Each call rendered with `context` plus its arguments, `nth` and `body`.
+fn render_calls(
+    engine: &Engine,
+    calls: &[crate::shortcode::Call],
+    context: &tera::Context,
+) -> Result<Vec<String>> {
+    calls
+        .iter()
+        .map(|call| {
+            let mut context = context.clone();
+            context.insert("nth", &call.nth);
+            if let Some(body) = &call.body {
+                context.insert("body", body);
+            }
+            for (key, value) in &call.args {
+                context.insert(key, value);
+            }
+            templates::render(engine, &call.template(), &context)
+                .with_context(|| format!("shortcode {} (call {} of it)", call.name, call.nth))
+        })
+        .collect()
+}
+
+fn replace_markers(item: &mut Value, outputs: &[String]) {
+    for key in ["content", "summary"] {
+        let Some(text) = item[key].as_str() else {
+            continue;
+        };
+        let mut text = text.to_owned();
+        for (n, html) in outputs.iter().enumerate() {
+            text = text.replace(&crate::shortcode::marker(n), html);
+        }
+        item[key] = Value::String(text);
+    }
+}
+
 /// Render every output of `plan` into memory.
 fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut model = Model::new(site, plan.paths());
@@ -140,21 +238,7 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                     }
                 }
             }
-            for (s, section) in site.sections.iter().enumerate() {
-                model.sections[s]["pages"] = Value::Array(
-                    section
-                        .pages
-                        .iter()
-                        .map(|&p| model.pages[p].clone())
-                        .collect(),
-                );
-            }
-            for (t, taxonomy) in site.taxonomies.iter().enumerate() {
-                for (term_idx, term) in taxonomy.terms.iter().enumerate() {
-                    model.taxonomies[t]["terms"][term_idx]["pages"] =
-                        Value::Array(term.pages.iter().map(|&p| model.pages[p].clone()).collect());
-                }
-            }
+            refresh_listings(site, &mut model);
             engines = make_engines(site, &Arc::new(model.clone()))?;
         }
         if has_tera_section {
@@ -195,6 +279,7 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
             }
         }
     }
+    expand_shortcodes(site, &mut model)?;
     let model = Arc::new(model);
     let engines = make_engines(site, &model)?;
     let mut renderer = Renderer {

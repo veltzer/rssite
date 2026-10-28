@@ -249,6 +249,10 @@ impl Config {
             emoji: self.markdown.emoji,
             // Set per page, from its language's direction.
             code_ltr: false,
+            // Set by the site, which knows its templates; the `markdown`
+            // filter leaves calls as text.
+            shortcodes: None,
+            first_line: 1,
         }
     }
 }

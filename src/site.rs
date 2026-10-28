@@ -157,6 +157,16 @@ impl Templates {
     pub fn has(&self, name: &str) -> bool {
         self.files.contains_key(name)
     }
+
+    /// The names of the shortcodes: `shortcodes/<name>.html` templates.
+    pub fn shortcodes(&self) -> BTreeSet<String> {
+        self.files
+            .keys()
+            .filter_map(|k| k.strip_prefix(crate::shortcode::DIR)?.strip_suffix(".html"))
+            .filter(|name| !name.contains('/'))
+            .map(str::to_owned)
+            .collect()
+    }
 }
 
 fn template_references(text: &str) -> Vec<String> {
@@ -331,8 +341,10 @@ impl Site {
         site.build_taxonomies()?;
         site.relate_pages();
         site.git = crate::git::GitInfo::read(&site.root);
-        site.render_bodies()?;
+        // Templates first: rendering a body needs to know which shortcodes
+        // exist.
         site.load_templates()?;
+        site.render_bodies()?;
         site.static_files = site.layered_files(&site.config.static_dir)?;
         site.sass_files = site.layered_files(&site.config.sass_dir)?;
         site.published = site.published_files()?;
@@ -1282,6 +1294,7 @@ impl Site {
         RenderOptions {
             smart_punctuation: overrides.smart.unwrap_or(site.smart_punctuation),
             math: overrides.math.unwrap_or(site.math),
+            shortcodes: Some(self.templates.shortcodes()),
             ..site
         }
     }
@@ -1293,13 +1306,14 @@ impl Site {
             let lang = self.pages[i].file.lang.clone();
             let body_kind = self.pages[source].file.body_kind;
             let body = self.pages[source].file.body.clone();
+            let body_line = self.pages[source].file.body_line;
             let (page, from) = (&self.pages[i].front, &self.pages[source].front);
             let overrides = Overrides {
                 smart: page.smart_punctuation.or(from.smart_punctuation),
                 math: page.math.or(from.math),
             };
             let (rendered, links) = self
-                .render_body(body_kind, &body, &lang, overrides)
+                .render_body(body_kind, &body, body_line, &lang, overrides)
                 .with_context(|| format!("content file {}", self.pages[i].file.rel))?;
             self.pages[i].rendered = rendered;
             self.pages[i].link_sources = links
@@ -1319,7 +1333,7 @@ impl Site {
                 math: section.math.or(from.math),
             };
             let (rendered, links) = self
-                .render_body(file.body_kind, &file.body, &lang, overrides)
+                .render_body(file.body_kind, &file.body, file.body_line, &lang, overrides)
                 .with_context(|| format!("content file {}", file.rel))?;
             self.sections[i].rendered = rendered;
             self.sections[i].link_sources = links
@@ -1334,6 +1348,7 @@ impl Site {
         &self,
         kind: BodyKind,
         body: &str,
+        body_line: usize,
         lang: &str,
         overrides: Overrides,
     ) -> Result<(Rendered, Vec<String>)> {
@@ -1344,6 +1359,7 @@ impl Site {
                         .config
                         .language(lang)
                         .is_some_and(|l| l.direction == crate::config::Direction::Rtl),
+                    first_line: body_line,
                     ..self.render_options(overrides)
                 };
                 let resolve = |path: &str| {
@@ -1368,6 +1384,7 @@ impl Site {
                     toc: Vec::new(),
                     word_count: body.split_whitespace().count(),
                     links: Vec::new(),
+                    shortcodes: Vec::new(),
                 },
                 Vec::new(),
             )),

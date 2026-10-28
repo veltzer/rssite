@@ -42,6 +42,9 @@ pub struct ContentFile {
     pub body_kind: BodyKind,
     pub front: toml::Table,
     pub body: String,
+    /// The line of the file the body starts on, so an error found in the
+    /// body can name the file's line.
+    pub body_line: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +215,8 @@ pub fn scan(
         let required = body_kind == BodyKind::Markdown;
         let (front, body) =
             split_front_matter(&text, required).with_context(|| format!("content file {rel}"))?;
+        // The body is the end of the text, so what precedes it is the rest.
+        let body_line = text[..text.len() - body.len()].matches('\n').count() + 1;
         files.push(ContentFile {
             path,
             rel,
@@ -222,6 +227,7 @@ pub fn scan(
             body_kind,
             front,
             body,
+            body_line,
         });
     }
     Ok((files, assets))

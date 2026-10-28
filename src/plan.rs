@@ -140,6 +140,14 @@ impl Plan {
             if let Some(file) = &site.sections[page.section].file {
                 sources.insert(site.rel(&file.path));
             }
+            for call in &page.rendered.shortcodes {
+                let (files, cross, data) = site.template_sources(&call.template(), &page.file.lang);
+                sources.extend(files);
+                sources.extend(data);
+                if cross {
+                    sources.extend(all_content.iter().cloned());
+                }
+            }
             let body_file = &site.pages[page.body_source.unwrap_or(i)].file;
             if body_file.body_kind == crate::content::BodyKind::Tera {
                 let (files, cross, data) =
@@ -184,6 +192,14 @@ impl Plan {
                 sources.insert(site.rel(&file.path));
             }
             sources.extend(section.link_sources.iter().cloned());
+            for call in &section.rendered.shortcodes {
+                let (files, cross, data) = site.template_sources(&call.template(), &section.lang);
+                sources.extend(files);
+                sources.extend(data);
+                if cross {
+                    sources.extend(all_content.iter().cloned());
+                }
+            }
             if let Some(body_file) = &site.sections[section.body_source.unwrap_or(i)].file
                 && body_file.body_kind == crate::content::BodyKind::Tera
             {

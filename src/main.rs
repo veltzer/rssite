@@ -12,6 +12,7 @@ mod markdown;
 mod plan;
 mod render;
 mod serve;
+mod shortcode;
 mod site;
 mod slug;
 mod templates;

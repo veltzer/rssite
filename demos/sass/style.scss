@@ -87,6 +87,35 @@ figure.code-block {
   }
 }
 
+// Shortcodes (templates/shortcodes/).
+kbd {
+  padding: 0.05rem 0.35rem;
+  font: 0.85em ui-monospace, monospace;
+  background: #f6f8fa;
+  border: 1px solid #d1d9e0;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+
+.shortcode-details {
+  margin: 1rem 0;
+  padding: 0.5rem 1rem;
+  border: 1px solid #d1d9e0;
+  border-radius: 6px;
+
+  summary {
+    font-weight: 600;
+    cursor: pointer;
+  }
+}
+
+.video iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: 6px;
+}
+
 .toc,
 .pager {
   margin: 1.5rem 0;

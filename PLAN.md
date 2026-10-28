@@ -21,31 +21,29 @@ Done since this list was written, documented in
 opt-in math, `rel` and `target` on external links, line numbers and
 highlighted lines in code blocks, live reload in `serve`, mermaid diagram
 blocks, heading anchor links, code block titles, left-to-right code on
-right-to-left pages, emoji shortcodes, and a section's `[cascade]` of front
-matter to everything below it. The [demo site](demos/) shows each of them.
+right-to-left pages, emoji shortcodes, a section's `[cascade]` of front
+matter to everything below it, and shortcodes (templates called from
+markdown). The [demo site](demos/) shows each of them.
 
 ## Bigger features
 
-1. **Shortcodes**: zola's `{{ youtube(id=…) }}`, Hugo's `{{< figure >}}`.
-   The standard way to put a figure, video or callout in markdown without raw
-   HTML. Each shortcode is a template, so the plan still lists every source.
-2. **Image processing**: resize, WebP and AVIF, `srcset`, automatic `width`
+1. **Image processing**: resize, WebP and AVIF, `srcset`, automatic `width`
    and `height` (no layout shift) and `loading="lazy"`. Zola's
    `resize_image`, Hugo's image processing. It fits plan/build separation:
    every output size is a known file.
-3. **Cache-busting asset URLs**: `style.css?h=abc123` (zola's
+2. **Cache-busting asset URLs**: `style.css?h=abc123` (zola's
    `cachebust=true`) or fingerprinted file names (Hugo's `fingerprint`).
    Today a changed stylesheet can be served stale from browser caches.
-4. **Minification** of HTML, CSS and inline JS: `minify_html` in zola,
+3. **Minification** of HTML, CSS and inline JS: `minify_html` in zola,
    `--minify` in Hugo. On a site of about 1,200 pages it saves real bytes.
-5. **Scheduled posts**: a future-dated post stays out unless `--future` is
+4. **Scheduled posts**: a future-dated post stays out unless `--future` is
    given, as in Hugo and Jekyll. To keep builds reproducible the cutoff has to
    be a plan input, for example `SOURCE_DATE_EPOCH`, which `src/build_info.rs`
    already reads.
-6. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
+5. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
    bilingual site it writes both `.en.md` and `.he.md` with matching front
    matter.
-7. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
+6. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
    preview deploys and local builds that should not point at the production
    host.
 
@@ -83,9 +81,11 @@ look were done.
 5. **Social preview images**: an Open Graph image per post with its title on
    a template (Astro, Hugo with a plugin). Hebrew text shaping is the work.
 6. **Privacy-friendly embeds**: video players that load on click, as Hugo's
-   privacy settings and "lite" YouTube embeds do. Needs shortcodes first.
+   privacy settings and "lite" YouTube embeds do. Shortcodes exist now, so
+   this is a matter of shipping good ones; the demo's `youtube` already uses
+   the no-cookie player.
 
 ## Where to start
 
-Shortcodes and image processing are the largest gaps against zola and Hugo
-for a blog this size.
+Image processing is the largest gap left against zola and Hugo for a blog
+this size. Privacy-friendly embeds can now be written as shortcodes.

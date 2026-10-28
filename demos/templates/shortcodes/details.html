@@ -1,0 +1,5 @@
+{#- {% details(summary="...") %}markdown{% end %}: a section that opens on click. -#}
+<details class="shortcode-details"{% if open %} open{% endif %}>
+<summary>{{ summary }}</summary>
+{{ body | markdown | safe }}
+</details>

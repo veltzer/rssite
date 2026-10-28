@@ -1,0 +1,4 @@
+{#- {{ kbd(keys="Ctrl+Shift+T") }}: each key in its own <kbd>. -#}
+{%- for key in keys | split(pat="+") -%}
+{%- if not loop.first %}+{% endif %}<kbd>{{ key }}</kbd>
+{%- endfor -%}

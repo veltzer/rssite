@@ -36,6 +36,9 @@ pub struct Rendered {
     pub word_count: usize,
     /// Content paths (`@/...`) this body links to, for dependency tracking.
     pub links: Vec<String>,
+    /// The shortcode calls in the body, in order; call `n` is the marker
+    /// `shortcode::marker(n)` in `html` until it is rendered.
+    pub shortcodes: Vec<crate::shortcode::Call>,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +61,11 @@ pub struct RenderOptions {
     /// The page is right to left: code blocks and inline code get
     /// `dir="ltr"`, so the bidi algorithm does not reorder them.
     pub code_ltr: bool,
+    /// The shortcodes the site has, when calls are to be taken out of the
+    /// body; `None` leaves `{{ name() }}` as text (the `markdown` filter).
+    pub shortcodes: Option<BTreeSet<String>>,
+    /// The file line the body starts on, for line numbers in errors.
+    pub first_line: usize,
 }
 
 /// Where a heading's `#` link to itself goes. Start and end, not left and
@@ -303,6 +311,13 @@ fn highlight(code: &str, fence: &Fence) -> Result<String> {
 /// Render `markdown`. Links of the form `@/section/page.md` (optionally with
 /// a language suffix and a `#fragment`) are resolved through `resolve`.
 pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -> Result<Rendered> {
+    let (markdown, shortcodes) = match &options.shortcodes {
+        Some(known) => {
+            crate::shortcode::extract(markdown, &|name| known.contains(name), options.first_line)?
+        }
+        None => (markdown.to_owned(), Vec::new()),
+    };
+    let markdown = markdown.as_str();
     let mut parser_options = Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -493,6 +508,7 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
         toc: build_toc(&headings),
         word_count,
         links,
+        shortcodes,
     })
 }
 
@@ -655,6 +671,8 @@ mod tests {
             heading_anchors: HeadingAnchors::None,
             emoji: false,
             code_ltr: false,
+            shortcodes: None,
+            first_line: 1,
         }
     }
 

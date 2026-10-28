@@ -153,6 +153,28 @@ On a page whose language has `direction = "rtl"`, code blocks get `<pre dir="ltr
 
 Links that leave the site, absolute `http` or `https` URLs outside `base_url`, can get `target="_blank"` (with `rel="noopener"`), `rel="nofollow"` and `rel="noreferrer"`, each switched on in `[markdown]`. Links in raw HTML are left as they are.
 
+## Shortcodes
+
+A shortcode is a template in `templates/shortcodes/` (or a theme's) called from markdown, in zola's syntax. `{{ name(key=value, ...) }}` renders `templates/shortcodes/name.html` in place; `{% name(key=value) %}...{% end %}` does the same with the text between as `body`.
+
+```markdown
+Press {{ kbd(keys="Ctrl+C") }} to copy.
+
+{{ youtube(id="aqz-KE-bpKQ", title="Big Buck Bunny") }}
+
+{% details(summary="More") %}
+Anything *markdown* here.
+{% end %}
+```
+
+Arguments are `key=value` pairs separated by commas, and each value is a TOML value: a string in double or single quotes, a number, `true` or `false`, an array. The template sees each argument as a variable, plus `nth` (1 for the first call of that shortcode in the body, 2 for the next), `body` for a call with one (the raw text, which the template can pass through `markdown`), `page` or `section`, and everything else a page template has: `lang`, `config`, the functions. An argument named like one of those replaces it.
+
+A call alone on its line is a block: its output is not wrapped in a paragraph. A call in the middle of a line stays in its sentence. Calls inside code blocks and inline code are text, so a page can show the syntax; so is a `{{` or `{%` that is not followed by a name and an argument list. Calling a shortcode that has no template, arguments that are not TOML values, and a body call without its `{% end %}` each fail the build with the file, the line and what was expected. Calls do not nest.
+
+A page lists the templates of the shortcodes it calls (and what they include) as its sources, so editing a shortcode rebuilds the pages that call it. Shortcode output is part of the page's content and summary, and so of its feeds; it is not part of the text the page's meta description and search index entry are made from. The `markdown` template filter leaves calls as text.
+
+[The demo site](https://github.com/veltzer/rssite/tree/master/demos) has three: `kbd`, `details` and `youtube`.
+
 ## Sorting and pagination
 
 `sort_by = "date"` sorts newest first. `paginate_by = 10` writes the first ten posts at the section's URL and the rest at `page/2/`, `page/3/` and so on. There is no `page/1/`: the first pager is the section itself.
