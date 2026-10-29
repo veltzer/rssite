@@ -150,3 +150,9 @@ $callouts: (
     }
   }
 }
+
+// Images keep their aspect ratio from the width and height rssite writes.
+img {
+  max-width: 100%;
+  height: auto;
+}

@@ -177,11 +177,13 @@ fn template_references(text: &str) -> Vec<String> {
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
 
-/// Literal `load_data(path = "...")` paths in a template or body.
+/// Literal `load_data(path = "...")` and `get_image_metadata(path = "...")`
+/// paths in a template or body: files its output is made from.
 pub fn load_data_paths(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"load_data\([^)]*\bpath\s*=\s*"([^"]+)""#).expect("valid regex")
+        regex::Regex::new(r#"(?:load_data|get_image_metadata)\([^)]*\bpath\s*=\s*"([^"]+)""#)
+            .expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -214,6 +216,51 @@ struct Overrides {
     math: Option<bool>,
 }
 
+/// A body as rendered, with what it refers to.
+#[derive(Default)]
+struct Body {
+    rendered: Rendered,
+    /// Content files it links to, relative to the content directory.
+    links: Vec<String>,
+    /// Image files it shows, relative to the site root.
+    image_sources: Vec<String>,
+    /// The image variants it uses, by output path.
+    images: Vec<(String, crate::images::Variant)>,
+}
+
+/// The site path (`/images/a.jpg`) an image URL written in a body at site
+/// path `page` points at; `None` for another host, a `data:` URL, or one
+/// with a query or fragment.
+fn image_url_path(dest: &str, page: &str, base_url: &str) -> Option<String> {
+    let dest = match dest.strip_prefix(base_url) {
+        Some(rest) if !base_url.is_empty() && rest.starts_with('/') => rest,
+        _ => dest,
+    };
+    if dest.contains("://") || dest.starts_with("//") || dest.starts_with("data:") {
+        return None;
+    }
+    if dest.contains(['?', '#']) || dest.is_empty() {
+        return None;
+    }
+    let joined = if dest.starts_with('/') {
+        dest.to_owned()
+    } else {
+        let dir = &page[..page.rfind('/').map_or(0, |at| at + 1)];
+        format!("{dir}{dest}")
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(format!("/{}", parts.join("/")))
+}
+
 pub struct Site {
     pub root: PathBuf,
     pub config: Config,
@@ -239,6 +286,8 @@ pub struct Site {
     pub git: Option<crate::git::GitInfo>,
     /// When this build ran, the same for every page it writes.
     pub build: crate::build_info::BuildInfo,
+    /// The image variants markdown bodies use, by output path.
+    pub images: BTreeMap<String, crate::images::Variant>,
 }
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
@@ -327,6 +376,7 @@ impl Site {
             drafted_sections: BTreeSet::new(),
             git: None,
             build: crate::build_info::BuildInfo::now(),
+            images: BTreeMap::new(),
         };
         site.content_files = files
             .iter()
@@ -341,13 +391,16 @@ impl Site {
         site.build_taxonomies()?;
         site.relate_pages();
         site.git = crate::git::GitInfo::read(&site.root);
-        // Templates first: rendering a body needs to know which shortcodes
-        // exist.
+        // Templates and files first: rendering a body needs to know which
+        // shortcodes exist and which file an image is.
         site.load_templates()?;
-        site.render_bodies()?;
         site.static_files = site.layered_files(&site.config.static_dir)?;
         site.sass_files = site.layered_files(&site.config.sass_dir)?;
         site.published = site.published_files()?;
+        if site.config.images.enabled {
+            crate::images::check(&site.config.images)?;
+        }
+        site.render_bodies()?;
         Ok(site)
     }
 
@@ -1301,6 +1354,11 @@ impl Site {
 
     fn render_bodies(&mut self) -> Result<()> {
         let content_dir = self.config.content_dir.clone();
+        let files = if self.config.images.enabled {
+            self.file_outputs()
+        } else {
+            BTreeMap::new()
+        };
         for i in 0..self.pages.len() {
             let source = self.pages[i].body_source.unwrap_or(i);
             let lang = self.pages[i].file.lang.clone();
@@ -1312,14 +1370,18 @@ impl Site {
                 smart: page.smart_punctuation.or(from.smart_punctuation),
                 math: page.math.or(from.math),
             };
-            let (rendered, links) = self
-                .render_body(body_kind, &body, body_line, &lang, overrides)
+            let path = self.pages[i].path.clone();
+            let body = self
+                .render_body(body_kind, &body, body_line, &lang, &path, overrides, &files)
                 .with_context(|| format!("content file {}", self.pages[i].file.rel))?;
-            self.pages[i].rendered = rendered;
-            self.pages[i].link_sources = links
+            self.pages[i].rendered = body.rendered;
+            self.pages[i].link_sources = body
+                .links
                 .into_iter()
                 .map(|rel| format!("{content_dir}/{rel}"))
+                .chain(body.image_sources)
                 .collect();
+            self.images.extend(body.images);
         }
         for i in 0..self.sections.len() {
             let source = self.sections[i].body_source.unwrap_or(i);
@@ -1332,26 +1394,41 @@ impl Site {
                 smart: section.smart_punctuation.or(from.smart_punctuation),
                 math: section.math.or(from.math),
             };
-            let (rendered, links) = self
-                .render_body(file.body_kind, &file.body, file.body_line, &lang, overrides)
+            let path = self.sections[i].path.clone();
+            let body = self
+                .render_body(
+                    file.body_kind,
+                    &file.body,
+                    file.body_line,
+                    &lang,
+                    &path,
+                    overrides,
+                    &files,
+                )
                 .with_context(|| format!("content file {}", file.rel))?;
-            self.sections[i].rendered = rendered;
-            self.sections[i].link_sources = links
+            self.sections[i].rendered = body.rendered;
+            self.sections[i].link_sources = body
+                .links
                 .into_iter()
                 .map(|rel| format!("{content_dir}/{rel}"))
+                .chain(body.image_sources)
                 .collect();
+            self.images.extend(body.images);
         }
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_body(
         &self,
         kind: BodyKind,
         body: &str,
         body_line: usize,
         lang: &str,
+        path: &str,
         overrides: Overrides,
-    ) -> Result<(Rendered, Vec<String>)> {
+        files: &BTreeMap<String, PathBuf>,
+    ) -> Result<Body> {
         match kind {
             BodyKind::Markdown => {
                 let options = RenderOptions {
@@ -1366,17 +1443,44 @@ impl Site {
                     self.resolve_content_path(path, lang)
                         .map(|(permalink, _)| permalink)
                 };
-                let rendered = markdown::render(body, &options, &resolve)?;
+                let images = std::cell::RefCell::new(Vec::new());
+                let image_sources = std::cell::RefCell::new(Vec::new());
+                let writer = |dest: &str, alt: &str, title: &str| -> Result<Option<String>> {
+                    let Some((out_path, source)) = self.image_file(dest, path, files) else {
+                        return Ok(None);
+                    };
+                    let info = crate::images::info(source)?;
+                    let picture = crate::images::picture(
+                        &self.config.images,
+                        dest,
+                        &out_path,
+                        source,
+                        info,
+                        alt,
+                        title,
+                    );
+                    image_sources.borrow_mut().push(self.rel(source));
+                    images.borrow_mut().extend(picture.variants);
+                    Ok(Some(picture.html))
+                };
+                let writer: Option<&markdown::ImageWriter> =
+                    self.config.images.enabled.then_some(&writer);
+                let rendered = markdown::render_with_images(body, &options, &resolve, writer)?;
                 let links = rendered
                     .links
                     .iter()
                     .filter_map(|l| self.resolve_content_path(l, lang).map(|(_, rel)| rel))
                     .filter(|rel| !rel.is_empty())
                     .collect();
-                Ok((rendered, links))
+                Ok(Body {
+                    rendered,
+                    links,
+                    image_sources: image_sources.into_inner(),
+                    images: images.into_inner(),
+                })
             }
-            BodyKind::Html => Ok((
-                Rendered {
+            BodyKind::Html => Ok(Body {
+                rendered: Rendered {
                     html: body.to_owned(),
                     summary: body
                         .find(markdown::SUMMARY_MARKER)
@@ -1386,11 +1490,54 @@ impl Site {
                     links: Vec::new(),
                     shortcodes: Vec::new(),
                 },
-                Vec::new(),
-            )),
+                ..Body::default()
+            }),
             // Rendered at template time, with the page's context.
-            BodyKind::Tera => Ok((Rendered::default(), Vec::new())),
+            BodyKind::Tera => Ok(Body::default()),
         }
+    }
+
+    /// Every file the build copies as it is, by output path: static files,
+    /// published directories and content assets. What an image URL can
+    /// point at.
+    fn file_outputs(&self) -> BTreeMap<String, PathBuf> {
+        let mut files = BTreeMap::new();
+        for file in &self.static_files {
+            files.insert(file.rel.clone(), file.path.clone());
+        }
+        for file in &self.published {
+            files.insert(file.out.clone(), file.path.clone());
+        }
+        for asset in &self.assets {
+            for language in &self.config.languages {
+                if self.under_drafted_section(&asset.components, &language.code) {
+                    continue;
+                }
+                if let Ok(dir) = self.section_path(&language.code, &asset.components) {
+                    files.insert(
+                        format!("{}{}", crate::plan::strip_root(&dir), asset.name),
+                        asset.path.clone(),
+                    );
+                }
+            }
+        }
+        files
+    }
+
+    /// The output path and source of the image a body at site path `page`
+    /// writes as `dest`, when it is a local file `[images]` handles.
+    fn image_file<'a>(
+        &self,
+        dest: &str,
+        page: &str,
+        files: &'a BTreeMap<String, PathBuf>,
+    ) -> Option<(String, &'a PathBuf)> {
+        let url = image_url_path(dest, page, &self.config.base_url)?;
+        let out = url.trim_start_matches('/');
+        if !crate::images::handles(out) {
+            return None;
+        }
+        files.get(out).map(|source| (out.to_owned(), source))
     }
 
     /// The theme's templates first, then the site's, which replace a theme
@@ -1553,6 +1700,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_urls_resolve_against_the_page() {
+        let at = |dest| image_url_path(dest, "/he/blog/post/", "https://x.org");
+        assert_eq!(
+            at("../../../images/a.jpg").as_deref(),
+            Some("/images/a.jpg")
+        );
+        assert_eq!(at("a.jpg").as_deref(), Some("/he/blog/post/a.jpg"));
+        assert_eq!(at("./a.jpg").as_deref(), Some("/he/blog/post/a.jpg"));
+        assert_eq!(at("/images/a.jpg").as_deref(), Some("/images/a.jpg"));
+        assert_eq!(
+            at("https://x.org/images/a.jpg").as_deref(),
+            Some("/images/a.jpg")
+        );
+        assert_eq!(at("https://other.org/a.jpg"), None);
+        assert_eq!(at("//cdn.org/a.jpg"), None);
+        assert_eq!(at("data:image/png;base64,AAAA"), None);
+        assert_eq!(at("a.jpg?v=2"), None);
+        assert_eq!(at("../../../../../a.jpg"), None, "above the site root");
+    }
+
+    #[test]
     fn strip_lang_removes_only_the_suffix() {
         assert_eq!(strip_lang("blog/post.en.md", "en"), "blog/post.md");
         assert_eq!(strip_lang("blog/_index.he.md", "he"), "blog/_index.md");
@@ -1607,6 +1775,10 @@ mod tests {
         );
         assert_eq!(found, vec!["out/build_info.toml", "data/a.json"]);
         assert!(load_data_paths("{{ page.title }}").is_empty());
+        assert_eq!(
+            load_data_paths("{% set m = get_image_metadata(path=\"static/a.png\") %}"),
+            vec!["static/a.png"]
+        );
         let urls = content_url_paths(
             "{{ get_url(lang=\"he\", path=\"@/blog/post.md#top\") }} {{ get_url(path=\"style.css\") }}",
         );

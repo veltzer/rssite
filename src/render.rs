@@ -288,7 +288,20 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
         engines,
     };
     let mut files = BTreeMap::new();
+    let images: Vec<&Output> = plan
+        .outputs
+        .iter()
+        .filter(|o| matches!(o.kind, Kind::Image(_)))
+        .collect();
+    let variants: Vec<&crate::images::Variant> =
+        images.iter().map(|o| &site.images[&o.path]).collect();
+    for (output, bytes) in images.iter().zip(crate::images::encode_all(&variants)?) {
+        files.insert(output.path.clone(), bytes);
+    }
     for output in &plan.outputs {
+        if matches!(output.kind, Kind::Image(_)) {
+            continue;
+        }
         let bytes = renderer
             .render(output)
             .with_context(|| format!("producing {}", output.path))?;
@@ -586,6 +599,7 @@ impl Renderer<'_> {
                     .map_err(|e| anyhow::anyhow!("compiling {}: {e}", self.site.rel(path)))?
                     .into_bytes()
             }
+            Kind::Image(path) => crate::images::encode(&self.site.images[path])?,
             Kind::Alias { target } => crate::builtin::redirect(target).into_bytes(),
             Kind::HighlightCss => {
                 crate::markdown::highlight_css(&self.site.config.markdown.highlight_theme)?

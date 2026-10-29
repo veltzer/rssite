@@ -7,6 +7,7 @@ mod config;
 mod content;
 mod git;
 mod i18n;
+mod images;
 mod init;
 mod markdown;
 mod plan;

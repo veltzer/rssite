@@ -98,6 +98,17 @@ impl ExternalLinks {
 /// content exists.
 pub type LinkResolver<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
+/// What an image (its resolved URL, alt text and title) is written as;
+/// `None` keeps the plain `<img>`.
+pub type ImageWriter<'a> = dyn Fn(&str, &str, &str) -> Result<Option<String>> + 'a;
+
+/// An image being read: its tag, the events of its alt text, and that text.
+struct OpenImage<'a> {
+    tag: Tag<'a>,
+    events: Vec<Event<'a>>,
+    alt: String,
+}
+
 fn syntax_set() -> &'static SyntaxSet {
     static SET: OnceLock<SyntaxSet> = OnceLock::new();
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
@@ -311,6 +322,17 @@ fn highlight(code: &str, fence: &Fence) -> Result<String> {
 /// Render `markdown`. Links of the form `@/section/page.md` (optionally with
 /// a language suffix and a `#fragment`) are resolved through `resolve`.
 pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -> Result<Rendered> {
+    render_with_images(markdown, options, resolve, None)
+}
+
+/// `render`, with every image offered to `images` once its alt text is
+/// known.
+pub fn render_with_images(
+    markdown: &str,
+    options: &RenderOptions,
+    resolve: &LinkResolver,
+    images: Option<&ImageWriter>,
+) -> Result<Rendered> {
     let (markdown, shortcodes) = match &options.shortcodes {
         Some(known) => {
             crate::shortcode::extract(markdown, &|name| known.contains(name), options.first_line)?
@@ -341,8 +363,38 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
     let mut used_ids: BTreeMap<String, usize> = BTreeMap::new();
     let mut heading: Option<(u8, Option<String>, String, usize)> = None;
     let mut code: Option<(Fence, String)> = None;
+    let mut image: Option<OpenImage> = None;
 
     for event in parser {
+        if let Some(open) = image.as_mut() {
+            match event {
+                Event::End(TagEnd::Image) => {
+                    let open = image.take().expect("image was opened");
+                    let Tag::Image {
+                        dest_url, title, ..
+                    } = &open.tag
+                    else {
+                        unreachable!("only images are opened");
+                    };
+                    let writer = images.expect("images are opened only with a writer");
+                    match writer(dest_url, &open.alt, title)? {
+                        Some(html) => events.push(Event::InlineHtml(CowStr::from(html))),
+                        None => {
+                            events.push(Event::Start(open.tag));
+                            events.extend(open.events);
+                            events.push(Event::End(TagEnd::Image));
+                        }
+                    }
+                }
+                Event::Text(text) | Event::Code(text) => {
+                    word_count += text.split_whitespace().count();
+                    open.alt.push_str(&text);
+                    open.events.push(Event::Text(text));
+                }
+                other => open.events.push(other),
+            }
+            continue;
+        }
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 let fence = match kind {
@@ -458,12 +510,21 @@ pub fn render(markdown: &str, options: &RenderOptions, resolve: &LinkResolver) -
                 id,
             }) => {
                 let dest = resolve_dest(&dest_url, resolve, &mut links)?;
-                events.push(Event::Start(Tag::Image {
+                let tag = Tag::Image {
                     link_type,
                     dest_url: CowStr::from(dest),
                     title,
                     id,
-                }));
+                };
+                if images.is_some() {
+                    image = Some(OpenImage {
+                        tag,
+                        events: Vec::new(),
+                        alt: String::new(),
+                    });
+                } else {
+                    events.push(Event::Start(tag));
+                }
             }
             Event::Text(text) => {
                 word_count += text.split_whitespace().count();

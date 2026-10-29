@@ -15,6 +15,11 @@ deunicode = "1"
 # GitHub's :shortcode: names, for `[markdown] emoji`.
 emojis = "0.9"
 grass = { version = "0.13", default-features = false }
+# Image processing (`[images]`): decoding, resizing, and the JPEG, PNG and
+# AVIF encoders. Its own WebP encoder is lossless only, which makes photos
+# bigger than the JPEG they came from, hence the webp crate below. AVIF goes
+# through rav1e without its assembly, so the build needs no nasm.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "avif"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 # The HTML writer's own escaping, for the external links rssite writes itself.
 pulldown-cmark-escape = "0.11"
@@ -29,6 +34,12 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 tera = "1"
 toml = "1"
 walkdir = "2"
+# Lossy WebP through libwebp, built from source by its -sys crate.
+webp = { version = "0.3", default-features = false }
+
+[dev-dependencies]
+# The tests make the images they build sites with, and read back what came out.
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 
 # Dev builds favour compile speed: line tables keep file:line in backtraces
 # at a fraction of full debug info's link cost, and dependencies get light

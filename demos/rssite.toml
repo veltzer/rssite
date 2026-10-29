@@ -40,3 +40,12 @@ diagram_languages = ["mermaid"]
 
 [feeds]
 limit = 20
+
+# Markdown images of local files become <picture>s: smaller widths, AVIF and
+# WebP, width and height, lazy loading. See content/images.en.md.
+[images]
+enabled = true
+widths = [320, 640]
+formats = ["avif", "webp"]
+# The body is at most 46rem wide (sass/style.scss).
+sizes = "(max-width: 46rem) 100vw, 46rem"

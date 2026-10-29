@@ -70,6 +70,7 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 - `get_page(path, lang=?)` and `get_section(path, lang=?)`: the page or section object for a content path such as `blog/post.md` or `blog/_index.md`.
 - `get_taxonomy(name, lang=?)`: `{name, lang, path, permalink, terms}`.
 - `get_taxonomy_url(name, term, lang=?)`: a term's permalink; an unknown term is an error.
+- `get_image_metadata(path)`: `{width, height}` of a JPEG, PNG, WebP or GIF file under the site root (`static/images/a.jpg`), after its EXIF orientation. A literal path is recorded as a source of the pages that use it.
 - `load_data(path, format=?, required=true)`: a TOML or JSON file under the site root as a value, any other file as a string. With `required=false` a missing file is `null`. The path is recorded as a source of the pages that use it.
 
 `now()`, `get_random()` and `get_env()` exist in Tera and are errors here: their results would differ between two builds of the same sources.

@@ -1136,3 +1136,125 @@ fn calling_a_shortcode_that_does_not_exist_names_the_file_and_line() {
         check.stderr
     );
 }
+
+// ── images ────────────────────────────────────────────────────────────────
+
+/// A site whose post shows `static/img/wide.png` (1000 x 500) and
+/// `static/img/small.png` (300 x 200), with `[images]` set by `config`.
+fn image_site(name: &str, config: &str) -> std::path::PathBuf {
+    let dir = site(name);
+    std::fs::create_dir_all(dir.join("static/img")).unwrap();
+    for (file, w, h) in [("wide.png", 1000, 500), ("small.png", 300, 200)] {
+        image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        })
+        .save(dir.join("static/img").join(file))
+        .unwrap();
+    }
+    write(
+        &dir,
+        "content/blog/pictures.en.md",
+        "+++\ntitle = \"Pictures\"\ndate = 2026-05-01\n+++\n\n![A *wide* one](/img/wide.png \"Wide\")\n\n![Small](../../../img/small.png)\n\n![Elsewhere](https://example.org/x.png)\n",
+    );
+    append_config(&dir, config);
+    dir
+}
+
+#[test]
+fn markdown_images_become_pictures_with_their_variants() {
+    let dir = image_site(
+        "images",
+        "[images]\nenabled = true\nwidths = [400, 800]\nsizes = \"50vw\"",
+    );
+    build_ok(&dir);
+    let html = read(&dir, "_site/en/blog/pictures/index.html");
+    assert!(
+        html.contains("<picture><source type=\"image/webp\" srcset=\"/img/wide-400w.webp 400w, /img/wide-800w.webp 800w\" sizes=\"50vw\" /><img src=\"/img/wide-800w.png\" srcset=\"/img/wide-400w.png 400w, /img/wide-800w.png 800w\" sizes=\"50vw\" width=\"800\" height=\"400\" alt=\"A wide one\" title=\"Wide\" loading=\"lazy\" decoding=\"async\" /></picture>"),
+        "an image wider than every width is never sent whole:\n{html}"
+    );
+    assert!(
+        html.contains("<picture><source type=\"image/webp\" srcset=\"../../../img/small-300w.webp 300w\" sizes=\"50vw\" /><img src=\"../../../img/small.png\" width=\"300\" height=\"200\" alt=\"Small\" loading=\"lazy\" decoding=\"async\" /></picture>"),
+        "a relative URL stays relative, and a small image keeps its own size:\n{html}"
+    );
+    assert!(
+        html.contains("<img src=\"https://example.org/x.png\" alt=\"Elsewhere\" />"),
+        "another host's image is left alone:\n{html}"
+    );
+
+    let webp = image::open(dir.join("_site/img/wide-800w.webp")).unwrap();
+    assert_eq!((webp.width(), webp.height()), (800, 400));
+    let png = image::open(dir.join("_site/img/wide-400w.png")).unwrap();
+    assert_eq!((png.width(), png.height()), (400, 200));
+    assert!(
+        dir.join("_site/img/wide.png").is_file(),
+        "the original is still published"
+    );
+
+    let plan = plan_of(&dir);
+    assert_eq!(
+        sources_of(&plan, "_site/img/wide-800w.webp"),
+        ["rssite.toml", "static/img/wide.png"]
+    );
+    let page = sources_of(&plan, "_site/en/blog/pictures/index.html");
+    assert!(
+        page.contains(&"static/img/wide.png".to_owned())
+            && page.contains(&"static/img/small.png".to_owned()),
+        "the page's width and height come from its images: {page:?}"
+    );
+    let planned = planned_paths(&plan);
+    for file in ["_site/img/wide-400w.png", "_site/img/small-300w.webp"] {
+        assert!(planned.contains(&file.to_owned()), "{file} not planned");
+    }
+}
+
+#[test]
+fn images_are_left_alone_unless_enabled() {
+    let dir = image_site("images-off", "");
+    build_ok(&dir);
+    let html = read(&dir, "_site/en/blog/pictures/index.html");
+    assert!(
+        html.contains("<img src=\"/img/wide.png\" alt=\"A wide one\" title=\"Wide\" />"),
+        "{html}"
+    );
+    assert!(!dir.join("_site/img/wide-480w.png").exists());
+}
+
+#[test]
+fn an_unknown_image_format_fails_the_build() {
+    let dir = image_site(
+        "images-bad",
+        "[images]\nenabled = true\nformats = [\"jxl\"]",
+    );
+    let error = build_err(&dir);
+    assert!(error.contains("images.formats has \"jxl\""), "{error}");
+}
+
+#[test]
+fn a_variant_colliding_with_a_static_file_is_named() {
+    let dir = image_site("images-clash", "[images]\nenabled = true\nwidths = [400]");
+    write(&dir, "static/img/wide-400w.webp", "already here");
+    let error = build_err(&dir);
+    assert!(
+        error.contains("two outputs would be written to img/wide-400w.webp")
+            && error.contains("a variant of image static/img/wide.png"),
+        "{error}"
+    );
+}
+
+#[test]
+fn templates_read_an_image_size_and_depend_on_the_image() {
+    let dir = image_site("image-metadata", "");
+    write(
+        &dir,
+        "templates/page.html",
+        "{% set m = get_image_metadata(path=\"static/img/wide.png\") %}<meta content=\"{{ m.width }}x{{ m.height }}\">",
+    );
+    build_ok(&dir);
+    let html = read(&dir, "_site/en/blog/pictures/index.html");
+    assert!(html.contains("<meta content=\"1000x500\">"), "{html}");
+    let plan = plan_of(&dir);
+    assert!(
+        sources_of(&plan, "_site/en/blog/pictures/index.html")
+            .contains(&"static/img/wide.png".to_owned())
+    );
+}

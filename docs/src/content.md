@@ -175,6 +175,31 @@ A page lists the templates of the shortcodes it calls (and what they include) as
 
 [The demo site](https://github.com/veltzer/rssite/tree/master/demos) has three: `kbd`, `details` and `youtube`.
 
+## Images
+
+With `[images] enabled = true`, a markdown image of a local JPEG, PNG, WebP or GIF file (a static file, a published one or a content asset, by an absolute, relative or `base_url` URL) is written as a `<picture>`:
+
+```html
+<picture>
+  <source type="image/webp" srcset="/img/a-480w.webp 480w, /img/a-960w.webp 960w" sizes="100vw" />
+  <img src="/img/a-960w.jpg" srcset="/img/a-480w.jpg 480w, /img/a-960w.jpg 960w" sizes="100vw"
+       width="960" height="640" alt="..." loading="lazy" decoding="async" />
+</picture>
+```
+
+- **Widths.** Every configured width smaller than the image's own, and the image itself when it is no wider than the largest width. An image wider than every width is never sent whole; its largest variant takes its place in `src`.
+- **Formats.** Each of `formats` (`"webp"`, `"avif"`) at the same widths, as `<source>` elements in that order. A browser takes the first type it supports and falls back to the original's format. AVIF is the smallest and the slowest to encode.
+- **`width` and `height`** of the `src` image, after its EXIF orientation, so the browser reserves the space before the image arrives. Give images `max-width: 100%; height: auto` in CSS.
+- **`loading="lazy"`** unless `lazy = false`, and `decoding="async"`.
+
+GIFs get `width`, `height` and lazy loading but no variants, since resizing an animation would keep its first frame. SVG files, images on other hosts, `data:` URLs and URLs with a query or fragment are left as written, and so are images in raw HTML.
+
+Each variant is its own output, named after the original with its width (`a.jpg` gives `a-480w.jpg`, `a-480w.webp`), in the same directory, with the image and `rssite.toml` as its sources. The page lists the images it shows as sources too, since its `width` and `height` come from them. The original is still published as it is. A variant that would land on an existing file fails the build with both named.
+
+Encoding is the slow part of a build with images, AVIF most of all, so encoded variants are kept in `$XDG_CACHE_HOME/rssite/images` (`~/.cache/rssite/images`), keyed by the image's bytes, the variant and rssite's version. Deleting the directory is always safe.
+
+Images in templates are not processed; `get_image_metadata` gives a template an image's size.
+
 ## Sorting and pagination
 
 `sort_by = "date"` sorts newest first. `paginate_by = 10` writes the first ten posts at the section's URL and the rest at `page/2/`, `page/3/` and so on. There is no `page/1/`: the first pager is the section itself.

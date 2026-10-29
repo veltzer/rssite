@@ -69,6 +69,14 @@ diagram_languages = ["mermaid"]      # fenced blocks left for a client-side rend
 heading_anchors = "none"             # a # link on headings: "none", "start" or "end"
 emoji = false                        # :rocket: as an emoji
 
+[images]
+enabled = false            # markdown images of local files as <picture>s, see Content
+widths = [480, 960, 1440]  # widths offered below the image's own
+formats = ["webp"]         # also offered: "webp", "avif", or both, in preference order
+quality = 80               # 1-100, for JPEG, WebP and AVIF
+sizes = "100vw"            # the sizes attribute: how wide the image is shown
+lazy = true                # loading="lazy"
+
 [feeds]
 limit = 20                 # newest entries per feed
 filename = "atom.xml"

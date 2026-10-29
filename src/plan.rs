@@ -40,6 +40,8 @@ pub enum Kind {
     Static(PathBuf),
     Sass(PathBuf),
     Asset(PathBuf),
+    /// A resized or re-encoded image, by its output path in `Site::images`.
+    Image(String),
     Alias {
         target: String,
     },
@@ -602,6 +604,19 @@ impl Plan {
             }
         }
 
+        // Image variants: each depends on its image and the [images]
+        // settings, nothing else.
+        for (path, variant) in &site.images {
+            let mut sources = BTreeSet::new();
+            sources.insert(site.rel(&variant.source));
+            sources.insert(config_file.clone());
+            outputs.push(Output {
+                path: path.clone(),
+                sources,
+                kind: Kind::Image(path.clone()),
+            });
+        }
+
         outputs.sort_by(|a, b| a.path.cmp(&b.path));
         for (from, to) in &local_targets {
             let path = to.split(['#', '?']).next().unwrap_or(to);
@@ -711,6 +726,13 @@ fn describe(site: &Site, kind: &Kind) -> String {
         Kind::Static(p) => format!("static file {}", site.rel(p)),
         Kind::Sass(p) => format!("stylesheet {}", site.rel(p)),
         Kind::Asset(p) => format!("content asset {}", site.rel(p)),
+        Kind::Image(p) => format!(
+            "a variant of image {}",
+            site.images
+                .get(p)
+                .map(|v| site.rel(&v.source))
+                .unwrap_or_default()
+        ),
         Kind::Alias { target } => format!("an alias of {target}"),
         Kind::HighlightCss => "the highlighting stylesheet".to_owned(),
     }

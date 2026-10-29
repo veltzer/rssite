@@ -67,6 +67,8 @@ pub struct Config {
     pub search: Search,
     #[serde(default)]
     pub related: Related,
+    #[serde(default)]
+    pub images: Images,
     /// Retired URLs, each written as a redirect page to where its content
     /// lives now. For URLs that are not a page's own `aliases`: a section
     /// that moved, a file that is gone, an address from an older site.
@@ -304,6 +306,66 @@ impl Default for Search {
             content: false,
         }
     }
+}
+
+/// `[images]`: what a markdown image of a local JPEG, PNG or WebP file is
+/// written as. Each smaller width and each extra format is its own output,
+/// next to the original, with the original as its source.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Images {
+    /// Off by default: on, markdown images change from a bare `<img>` to a
+    /// `<picture>` with `width`, `height`, `srcset` and lazy loading.
+    #[serde(default)]
+    pub enabled: bool,
+    /// The widths, in pixels, to offer below the original's. An image wider
+    /// than the largest is never served at its full size.
+    #[serde(default = "default_image_widths")]
+    pub widths: Vec<u32>,
+    /// Formats offered before the original's: "webp", "avif" or both, in
+    /// the order the browser should prefer them.
+    #[serde(default = "default_image_formats")]
+    pub formats: Vec<String>,
+    /// Encoder quality, 1 to 100, for JPEG, WebP and AVIF.
+    #[serde(default = "default_image_quality")]
+    pub quality: u8,
+    /// The `sizes` attribute: how wide the image is shown, for the browser
+    /// to pick a width from `srcset`.
+    #[serde(default = "default_image_sizes")]
+    pub sizes: String,
+    /// `loading="lazy"`: the browser fetches an image when it nears the
+    /// viewport.
+    #[serde(default = "default_true")]
+    pub lazy: bool,
+}
+
+impl Default for Images {
+    fn default() -> Self {
+        Images {
+            enabled: false,
+            widths: default_image_widths(),
+            formats: default_image_formats(),
+            quality: default_image_quality(),
+            sizes: default_image_sizes(),
+            lazy: true,
+        }
+    }
+}
+
+fn default_image_widths() -> Vec<u32> {
+    vec![480, 960, 1440]
+}
+
+fn default_image_formats() -> Vec<String> {
+    vec!["webp".to_owned()]
+}
+
+fn default_image_quality() -> u8 {
+    80
+}
+
+fn default_image_sizes() -> String {
+    "100vw".to_owned()
 }
 
 /// `page.related`: the pages of the same language sharing the most terms.

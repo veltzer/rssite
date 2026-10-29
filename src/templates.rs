@@ -682,6 +682,23 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
     }
     {
         let model = Arc::clone(model);
+        tera.register_function(
+            "get_image_metadata",
+            move |args: &HashMap<String, Value>| -> tera::Result<Value> {
+                let path = require_string(args, "path", "get_image_metadata")?;
+                if std::path::Path::new(&path).is_absolute() || path.split('/').any(|p| p == "..") {
+                    return Err(err(format!(
+                        "get_image_metadata: {path:?} must be a path inside the site"
+                    )));
+                }
+                let info = crate::images::info(&model.root.join(&path))
+                    .map_err(|e| err(format!("get_image_metadata: {e:#}")))?;
+                Ok(serde_json::json!({ "width": info.width, "height": info.height }))
+            },
+        );
+    }
+    {
+        let model = Arc::clone(model);
         let lang = lang.clone();
         tera.register_filter(
             "date",
