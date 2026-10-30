@@ -864,7 +864,9 @@ impl Renderer<'_> {
         for section in &site.sections {
             let alternates: Vec<Value> = section.translations.iter().map(|&t| json!({"lang": site.sections[t].lang, "permalink": site.sections[t].permalink})).collect();
             entries.push((section.permalink.clone(), json!({"permalink": section.permalink, "updated": section.updated.as_ref().map(|d| d.ymd()), "alternates": alternates})));
-            if let Some(pagers) = pager_count(section.pages.len(), section.front.paginate_by) {
+            if let Some(pagers) = pager_count(section.pages.len(), section.front.paginate_by)
+                .filter(|_| site.config.sitemap.pagers)
+            {
                 for n in 2..=pagers {
                     let permalink =
                         format!("{}{}/{n}/", section.permalink, section.front.paginate_path);
@@ -917,7 +919,9 @@ impl Renderer<'_> {
                     })
                     .collect();
                 entries.push((term.permalink.clone(), json!({"permalink": term.permalink, "updated": Value::Null, "alternates": alternates})));
-                if let Some(pagers) = pager_count(term.pages.len(), taxonomy.paginate_by) {
+                if let Some(pagers) = pager_count(term.pages.len(), taxonomy.paginate_by)
+                    .filter(|_| site.config.sitemap.pagers)
+                {
                     for n in 2..=pagers {
                         let permalink =
                             format!("{}{}/{n}/", term.permalink, taxonomy.paginate_path);

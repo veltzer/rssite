@@ -1077,6 +1077,24 @@ fn the_sitemap_pairs_translations_and_dates_sections() {
     assert_eq!(unique.len(), locs.len(), "no duplicates");
 }
 
+#[test]
+fn the_sitemap_can_leave_out_the_pagers() {
+    let dir = site("sitemap-pagers");
+    edit_config(&dir, "paginate_by = 2", "paginate_by = 1");
+    append_config(&dir, "[sitemap]\npagers = false");
+    build_ok(&dir);
+    assert!(
+        dir.join("_site/en/tags/religion/page/2/index.html")
+            .is_file()
+    );
+    let sitemap = read(&dir, "_site/sitemap.xml");
+    assert!(!sitemap.contains("/page/"), "{sitemap}");
+    assert!(
+        sitemap.contains("<loc>https://example.org/en/tags/religion/</loc>"),
+        "{sitemap}"
+    );
+}
+
 // ── assets, static files, sass ────────────────────────────────────────────
 
 #[test]

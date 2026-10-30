@@ -84,6 +84,7 @@ root = false               # also write the fallback language's feed at /atom.xm
 
 [sitemap]
 enabled = true
+pagers = true             # list page 2, 3, ... of paginated listings
 
 [search]
 enabled = false            # a JSON index per language at <prefix>search.json

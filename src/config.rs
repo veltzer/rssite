@@ -394,11 +394,19 @@ impl Default for Related {
 pub struct Sitemap {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// List the second and later pages of paginated sections and terms.
+    /// They only list pages the sitemap already names, and search engines
+    /// rarely index them, so a large site may prefer to leave them out.
+    #[serde(default = "default_true")]
+    pub pagers: bool,
 }
 
 impl Default for Sitemap {
     fn default() -> Self {
-        Sitemap { enabled: true }
+        Sitemap {
+            enabled: true,
+            pagers: true,
+        }
     }
 }
 
@@ -708,6 +716,7 @@ mod tests {
         assert_eq!(config.feeds.limit, 20);
         assert_eq!(config.feeds.filename, "atom.xml");
         assert!(config.sitemap.enabled);
+        assert!(config.sitemap.pagers);
         assert!(config.markdown.highlight);
         assert!(!config.markdown.smart_punctuation);
         assert_eq!(config.markdown.highlight_theme, "InspiredGitHub");
