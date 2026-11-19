@@ -470,6 +470,96 @@ fn a_page_gets_json_ld() {
     );
 }
 
+#[test]
+fn json_ld_names_the_author_by_id_and_the_page_by_its_image() {
+    let dir = site("json-ld-image");
+    prepend_config(&dir, "author_id = \"https://example.org/#person\"");
+    // The root cascade gives every page a card per language; the blog's
+    // gives each post its own; one post names an image itself.
+    write(
+        &dir,
+        "content/_index.en.md",
+        "+++\ntitle = \"Home\"\n[cascade]\nimage = \"images/card-{lang}.jpg\"\n+++\n",
+    );
+    write(
+        &dir,
+        "content/blog/_index.en.md",
+        "+++\ntitle = \"Blog\"\nsort_by = \"date\"\n[cascade]\nimage = \"/images/og/{stem}.{lang}.jpg\"\n+++\n",
+    );
+    write(
+        &dir,
+        "content/blog/second.en.md",
+        "+++\ntitle = \"Second post\"\ndate = 2026-02-10\nimage = \"https://cdn.example.net/second.png\"\n+++\n\nBody.\n",
+    );
+    write(
+        &dir,
+        "content/note.en.md",
+        "+++\ntitle = \"Note\"\n+++\n\nBody.\n",
+    );
+    write(
+        &dir,
+        "templates/page.html",
+        "<probe>{{ json_ld | safe }}</probe><image>{{ page.image }}</image>",
+    );
+    build_ok(&dir);
+    let first = read(&dir, "_site/en/blog/first/index.html");
+    let value: serde_json::Value = serde_json::from_str(&extract_probe(&first)).expect("JSON");
+    assert_eq!(value["author"]["@id"], "https://example.org/#person");
+    assert_eq!(value["author"]["name"], "Example Author");
+    assert_eq!(value["image"], "https://example.org/images/og/first.en.jpg");
+    assert!(first.contains("<image>https://example.org/images/og/first.en.jpg</image>"));
+    let second = read(&dir, "_site/en/blog/second/index.html");
+    assert!(second.contains("<image>https://cdn.example.net/second.png</image>"));
+    // A page outside the blog takes the root's; a Hebrew page takes
+    // neither, a cascade being per language.
+    let note = read(&dir, "_site/en/note/index.html");
+    assert!(
+        note.contains("<image>https://example.org/images/card-en.jpg</image>"),
+        "{note}"
+    );
+    let hebrew = read(&dir, "_site/he/blog/first/index.html");
+    let value: serde_json::Value = serde_json::from_str(&extract_probe(&hebrew)).expect("JSON");
+    assert!(value.get("image").is_none());
+    assert!(hebrew.contains("<image></image>"));
+}
+
+#[test]
+fn a_bad_image_or_author_id_is_an_error() {
+    for (image, error) in [
+        (
+            "images/{slug}.jpg",
+            "may use the placeholders {stem} and {lang} and no other",
+        ),
+        ("../x.jpg", "must be a URL or a path under the site root"),
+        ("/", "must be a URL or a path under the site root"),
+    ] {
+        expect_error(
+            "image-bad",
+            |dir| {
+                write(
+                    dir,
+                    "content/blog/first.en.md",
+                    &format!(
+                        "+++\ntitle = \"First post\"\ndate = 2026-01-10\nimage = \"{image}\"\n+++\n\nBody.\n"
+                    ),
+                );
+            },
+            error,
+        );
+    }
+    expect_error(
+        "author-id-without-author",
+        |dir| {
+            edit_config(
+                dir,
+                "author = \"Example Author\"",
+                "author_id = \"https://example.org/#me\"",
+            )
+        },
+        "author_id names the author's @id, so author must be set too",
+    );
+}
+
 // ── search index and robots.txt ───────────────────────────────────────────
 
 #[test]

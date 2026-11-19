@@ -41,6 +41,8 @@ pub struct Page {
     pub cascade_sources: Vec<String>,
     /// The pages of the same language sharing the most terms, best first.
     pub related: Vec<usize>,
+    /// The front matter's `image` as an absolute URL.
+    pub image: Option<String>,
 }
 
 #[derive(Debug)]
@@ -701,6 +703,30 @@ impl Site {
         Ok(path)
     }
 
+    /// A page's `image` as an absolute URL: `{stem}` and `{lang}` are the
+    /// file's name without its language suffix and its language, so one
+    /// cascaded value names a different image for every page. A path is
+    /// under the site root; the file is not looked for, since another build
+    /// step may be the one that writes it.
+    fn image_url(&self, image: &str, file: &ContentFile) -> Result<String> {
+        let filled = image
+            .replace("{stem}", &file.stem)
+            .replace("{lang}", &file.lang);
+        if filled.contains(['{', '}']) {
+            bail!(
+                "front matter: image {image:?} may use the placeholders {{stem}} and {{lang}} and no other"
+            );
+        }
+        if filled.starts_with("http://") || filled.starts_with("https://") {
+            return Ok(filled);
+        }
+        let path = filled.trim_start_matches('/');
+        if path.is_empty() || path.split('/').any(|part| part == "..") {
+            bail!("front matter: image {image:?} must be a URL or a path under the site root");
+        }
+        Ok(self.permalink(&format!("/{path}")))
+    }
+
     fn build_pages(&mut self, files: Vec<ContentFile>) -> Result<()> {
         let section_index: BTreeMap<(String, Vec<String>), usize> = self
             .sections
@@ -774,7 +800,15 @@ impl Site {
                     .unwrap_or_else(|| file.stem.clone())
             );
             let lookup_key = (file.lang.clone(), strip_lang(&file.rel, &file.lang));
+            let image = parsed
+                .front
+                .image
+                .as_deref()
+                .map(|image| self.image_url(image, &file))
+                .transpose()
+                .with_context(|| format!("content file {}", file.rel))?;
             let page = Page {
+                image,
                 front: parsed.front,
                 date: parsed.date,
                 updated: parsed.updated,

@@ -109,6 +109,10 @@ pub struct PageFront {
     pub smart_punctuation: Option<bool>,
     #[serde(default)]
     pub math: Option<bool>,
+    /// The page's image: a path under the site root or an absolute URL,
+    /// with `{stem}` and `{lang}` filled in from the file's name.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -380,14 +384,17 @@ pub fn parse_section_front(mut table: toml::Table) -> Result<ParsedSectionFront>
 
 /// The keys a section's `[cascade]` may set: the ones that mean the same on
 /// every page and subsection below it. `template` is not one: a section's
-/// `page_template` already chooses its pages' template.
-pub const CASCADE_KEYS: [&str; 3] = ["math", "smart_punctuation", "extra"];
+/// `page_template` already chooses its pages' template. `image` is a page's
+/// key: a cascade hands it to the pages below, and the sections, which have
+/// no image, pass it on untouched.
+pub const CASCADE_KEYS: [&str; 4] = ["math", "smart_punctuation", "extra", "image"];
 
 fn check_cascade(cascade: &toml::Table) -> Result<()> {
     for (key, value) in cascade {
         let ok = match key.as_str() {
             "math" | "smart_punctuation" => value.is_bool(),
             "extra" => value.is_table(),
+            "image" => value.is_str(),
             _ => bail!(
                 "front matter: cascade can set {}; {key:?} is not one of them",
                 CASCADE_KEYS.join(", ")
@@ -396,10 +403,10 @@ fn check_cascade(cascade: &toml::Table) -> Result<()> {
         if !ok {
             bail!(
                 "front matter: cascade.{key} must be {}, found a {}",
-                if key == "extra" {
-                    "a table"
-                } else {
-                    "true or false"
+                match key.as_str() {
+                    "extra" => "a table",
+                    "image" => "a string",
+                    _ => "true or false",
                 },
                 value.type_str()
             );

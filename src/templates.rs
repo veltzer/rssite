@@ -129,6 +129,12 @@ pub fn page_json_ld(site: &Site, i: usize, meta_description: &Value) -> String {
     });
     if !site.config.author.is_empty() {
         value["author"] = json!({"@type": "Person", "name": site.config.author});
+        if let Some(id) = &site.config.author_id {
+            value["author"]["@id"] = json!(id);
+        }
+    }
+    if let Some(image) = &page.image {
+        value["image"] = json!(image);
     }
     if let Some(date) = &page.date {
         value["datePublished"] = json!(date.rfc3339());
@@ -232,6 +238,7 @@ pub fn page_view(site: &Site, i: usize) -> Value {
         "next": page.next.map(|p| light_page(&site.pages[p])),
         "draft": page.front.draft,
         "weight": page.front.weight,
+        "image": page.image,
         "relative_path": page.file.rel,
         "components": page.file.components,
         "body_kind": page.file.body_kind,

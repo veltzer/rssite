@@ -20,6 +20,11 @@ pub struct Config {
     pub description: String,
     #[serde(default)]
     pub author: String,
+    /// The `@id` of the author in a page's JSON-LD: the IRI a `Person`
+    /// block the site's templates write carries, so a search engine reads
+    /// the post's author and that person as one entity.
+    #[serde(default)]
+    pub author_id: Option<String>,
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
     #[serde(default = "default_content_dir")]
@@ -480,6 +485,14 @@ impl Config {
         }
         if self.languages.is_empty() {
             bail!("{CONFIG_FILE}: at least one [[languages]] entry is required");
+        }
+        if let Some(id) = &self.author_id {
+            if id.trim().is_empty() {
+                bail!("{CONFIG_FILE}: author_id must not be empty");
+            }
+            if self.author.is_empty() {
+                bail!("{CONFIG_FILE}: author_id names the author's @id, so author must be set too");
+            }
         }
         let mut seen = std::collections::BTreeSet::new();
         for language in &mut self.languages {

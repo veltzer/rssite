@@ -1005,7 +1005,7 @@ fn a_cascade_sets_only_what_means_the_same_below() {
     for (cascade, error) in [
         (
             "template = \"x.html\"",
-            "cascade can set math, smart_punctuation, extra; \"template\" is not one of them",
+            "cascade can set math, smart_punctuation, extra, image; \"template\" is not one of them",
         ),
         (
             "math = \"yes\"",
@@ -1014,6 +1014,10 @@ fn a_cascade_sets_only_what_means_the_same_below() {
         (
             "extra = 3",
             "cascade.extra must be a table, found a integer",
+        ),
+        (
+            "image = true",
+            "cascade.image must be a string, found a boolean",
         ),
     ] {
         let dir = site("cascade-bad");

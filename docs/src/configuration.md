@@ -7,6 +7,7 @@ base_url = "https://example.org"   # required; a trailing slash is dropped
 title = "My site"
 description = "What the site is."
 author = "Me"
+# author_id = "https://example.org/#person"  # the author's @id in JSON-LD, see Templates
 
 # Directories, all relative to the site root. These are the defaults.
 output_dir = "_site"

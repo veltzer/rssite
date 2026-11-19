@@ -44,6 +44,7 @@ translation_key = "shared"     # see Translations
 body_from = "en"               # see Translations
 smart_punctuation = true       # overrides the config for this page
 math = true                    # overrides the config for this page, see Markdown
+image = "images/cards/{stem}.{lang}.jpg"   # the page's image, see below
 
 [taxonomies]
 tags = ["religion", "ethics"]  # every taxonomy must be declared in rssite.toml
@@ -97,7 +98,19 @@ banner = "Part of the courses"
 +++
 ```
 
-A cascade can set `math`, `smart_punctuation` and `extra`, the settings that mean the same on every page below; anything else is an error naming the key. (`template` is not one of them: a section's `page_template` chooses its own pages' template.) The nearest section wins: a subsection's cascade overrides its parent's key by key, `extra` merging key by key too, and a page's own front matter overrides every cascade. The cascade does not apply to the section that declares it, whose own front matter already says what it wants. Cascades are per language, like everything in a section index: `_index.en.md`'s reaches the English pages only. A page lists the section files whose cascade it took as sources in the manifest, so editing a cascade rebuilds exactly the pages under it.
+A cascade can set `math`, `smart_punctuation`, `extra` and `image`, the settings that mean the same on every page below; anything else is an error naming the key. `image` is a page's key: the sections below pass it on and take nothing from it. (`template` is not one of them: a section's `page_template` chooses its own pages' template.) The nearest section wins: a subsection's cascade overrides its parent's key by key, `extra` merging key by key too, and a page's own front matter overrides every cascade. The cascade does not apply to the section that declares it, whose own front matter already says what it wants. Cascades are per language, like everything in a section index: `_index.en.md`'s reaches the English pages only. A page lists the section files whose cascade it took as sources in the manifest, so editing a cascade rebuilds exactly the pages under it.
+
+A page's `image` is the picture that stands for it: a share card, a cover. It is a path under the site root (`images/cover.jpg`, with or without a leading `/`) or an absolute URL. Templates read it as `page.image`, always an absolute URL, and the page's JSON-LD carries it as `image`. Two placeholders are filled in from the file's own name, `{stem}` (the name without its language suffix and extension) and `{lang}`, so one value in a section's `[cascade]` names a different image for every page below:
+
+```toml
++++
+title = "Blog"
+[cascade]
+image = "images/cards/{stem}.{lang}.jpg"   # blog/first.en.md gets images/cards/first.en.jpg
++++
+```
+
+Any other `{...}` is an error. The file is not looked for: a card drawn by another step of the build does not exist yet when rssite runs.
 
 `require_translations = true` on a section index makes a missing translation an error: every page of the section must exist in every language the section itself exists in, and the error names the page and the language it lacks.
 
