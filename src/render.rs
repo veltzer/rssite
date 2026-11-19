@@ -14,6 +14,19 @@ pub struct Report {
     pub outputs: usize,
     pub written: usize,
     pub unchanged: usize,
+    /// Files an earlier build wrote that this one no longer does.
+    pub removed: usize,
+}
+
+impl Report {
+    /// `3 written, 10 unchanged`, with `, 1 removed` when something was.
+    pub fn counts(&self) -> String {
+        let mut text = format!("{} written, {} unchanged", self.written, self.unchanged);
+        if self.removed > 0 {
+            text.push_str(&format!(", {} removed", self.removed));
+        }
+        text
+    }
 }
 
 pub struct Options {
@@ -339,6 +352,7 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
         outputs: files.len(),
         written: 0,
         unchanged: 0,
+        removed: 0,
     };
     if options.write {
         let output_dir = site.root.join(&site.config.output_dir);
@@ -349,6 +363,12 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
                 report.unchanged += 1;
             }
         }
+        // What the last build wrote and this one does not: a deleted page,
+        // a renamed file. Anything else in the directory is not ours.
+        let previous = crate::record::load(&output_dir);
+        let stale = previous.iter().filter(|path| !files.contains_key(*path));
+        report.removed = remove_outputs(&output_dir, stale)?;
+        crate::record::save(&output_dir, files.keys());
     }
     Ok(report)
 }
@@ -422,17 +442,23 @@ pub fn clean(root: &Path, drafts: bool) -> Result<usize> {
     let site = Site::load(root, drafts)?;
     let plan = Plan::compute(&site)?;
     let output_dir = site.root.join(&site.config.output_dir);
+    remove_outputs(&output_dir, plan.outputs.iter().map(|o| &o.path))
+}
+
+/// Remove the files at `paths` (relative to `output_dir`) that exist, and
+/// the directories that empties; returns how many files went.
+fn remove_outputs<'a>(output_dir: &Path, paths: impl Iterator<Item = &'a String>) -> Result<usize> {
     let mut removed = 0;
     let mut dirs: BTreeSet<std::path::PathBuf> = BTreeSet::new();
-    for output in &plan.outputs {
-        let path = output_dir.join(&output.path);
+    for relative in paths {
+        let path = output_dir.join(relative);
         if path.is_file() {
             std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
             removed += 1;
         }
         let mut parent = path.parent();
         while let Some(dir) = parent {
-            if dir == output_dir || !dir.starts_with(&output_dir) {
+            if dir == output_dir || !dir.starts_with(output_dir) {
                 break;
             }
             dirs.insert(dir.to_path_buf());
@@ -776,7 +802,11 @@ impl Renderer<'_> {
                     .or(self.site.pages[p].date.as_ref())
             })
             .max()
-            .map(|d| d.rfc3339());
+            .map(|d| d.rfc3339())
+            // Atom requires <updated>. A feed without entries has no date
+            // of its own, and the build's would differ from run to run, so
+            // it carries the epoch: "never".
+            .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_owned());
         let feed_url = format!("{}/{output_path}", self.site.config.base_url);
         let mut context = self.base_context(lang, &format!("/{output_path}"));
         context.insert("pages", &entries);

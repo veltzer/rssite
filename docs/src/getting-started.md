@@ -73,3 +73,5 @@ highlight.css              the syntax highlighting theme
 ```
 
 Nothing deletes the output directory. A build writes the planned files and leaves everything else alone, so other tools can write into the same tree. `rssite clean` removes exactly the planned files.
+
+A build also removes the files the previous build wrote that it no longer does: a deleted page does not stay behind to be deployed. It knows them from a record it keeps per output directory in `$XDG_CACHE_HOME/rssite/outputs` (`~/.cache/rssite/outputs`), outside the site; without that record (a first build, a fresh checkout, a cleared cache) it removes nothing, and it never touches a file it did not write.

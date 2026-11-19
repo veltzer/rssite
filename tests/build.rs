@@ -1291,3 +1291,40 @@ fn two_images_cannot_share_a_variant_file() {
         build.stderr
     );
 }
+
+#[test]
+fn a_build_removes_what_the_last_one_wrote_and_this_one_does_not() {
+    let dir = site("stale-outputs");
+    write(
+        &dir,
+        "content/blog/gone.en.md",
+        "+++\ntitle = \"Gone\"\ndate = 2026-05-01\n+++\nbody\n",
+    );
+    write(&dir, "static/retired/asset.txt", "x");
+    build_ok(&dir);
+    assert!(dir.join("_site/en/blog/gone/index.html").is_file());
+    // Another tool's file, in a directory of its own and in one of ours.
+    write(&dir, "_site/other-tool/report.html", "theirs");
+    write(&dir, "_site/en/blog/theirs.txt", "theirs");
+    std::fs::remove_file(dir.join("content/blog/gone.en.md")).unwrap();
+    std::fs::remove_file(dir.join("static/retired/asset.txt")).unwrap();
+    let build = build_ok(&dir);
+    // The page, the asset, and whatever listing the page was alone on.
+    assert!(build.stderr.contains(" removed"), "{}", build.stderr);
+    assert!(
+        !dir.join("_site/en/blog/gone").exists(),
+        "the page and its emptied directory are gone"
+    );
+    assert!(!dir.join("_site/retired").exists());
+    assert_eq!(read(&dir, "_site/other-tool/report.html"), "theirs");
+    assert_eq!(read(&dir, "_site/en/blog/theirs.txt"), "theirs");
+    assert!(dir.join("_site/en/blog/first/index.html").is_file());
+    let again = build_ok(&dir);
+    assert!(!again.stderr.contains("removed"), "{}", again.stderr);
+    // `check` writes nothing and removes nothing.
+    write(&dir, "static/kept.txt", "x");
+    build_ok(&dir);
+    std::fs::remove_file(dir.join("static/kept.txt")).unwrap();
+    assert!(run(&dir, &["check"]).ok);
+    assert!(dir.join("_site/kept.txt").is_file());
+}

@@ -86,10 +86,7 @@ fn build(root: &Path, drafts: bool) -> bool {
     };
     match crate::render::run(root, drafts, &options) {
         Ok(report) => {
-            println!(
-                "built {} files ({} written, {} unchanged)",
-                report.outputs, report.written, report.unchanged
-            );
+            println!("built {} files ({})", report.outputs, report.counts());
             true
         }
         Err(error) => {

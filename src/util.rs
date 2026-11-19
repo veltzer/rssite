@@ -206,6 +206,17 @@ pub fn glob_match(pattern: &str, rel: &str) -> Result<bool> {
     Ok(re.is_match(rel))
 }
 
+/// Where rssite keeps `kind` of thing between runs:
+/// `$XDG_CACHE_HOME/rssite/<kind>` (`~/.cache/rssite/<kind>`); `None`
+/// without either variable.
+pub fn cache_dir(kind: &str) -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
+    Some(base.join("rssite").join(kind))
+}
+
 /// Print `text` and a newline on stdout. A reader that closed the pipe
 /// (`rssite plan | head`) is not an error: the output ends there, quietly,
 /// where `println!` would panic.

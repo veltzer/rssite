@@ -11,6 +11,13 @@ pub fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rssite"))
 }
 
+/// A cache of the test run's own, passed as `XDG_CACHE_HOME`: the binary
+/// keeps a record per output directory there, and every test has its own
+/// directory, which would otherwise pile up in the developer's cache.
+pub fn cache_home() -> PathBuf {
+    std::env::temp_dir().join(format!("rssite-test-cache-{}", std::process::id()))
+}
+
 pub fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bilingual")
 }
@@ -45,6 +52,7 @@ pub fn run(dir: &Path, args: &[&str]) -> Run {
     let output = Command::new(binary())
         .args(args)
         .current_dir(dir)
+        .env("XDG_CACHE_HOME", cache_home())
         .output()
         .unwrap();
     Run {

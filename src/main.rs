@@ -11,6 +11,7 @@ mod images;
 mod init;
 mod markdown;
 mod plan;
+mod record;
 mod render;
 mod serve;
 mod shortcode;
@@ -130,10 +131,7 @@ fn run(cli: Cli) -> Result<()> {
                 write: true,
             };
             let report = render::run(&cli.root, cli.drafts, &options)?;
-            eprintln!(
-                "built {} files: {} written, {} unchanged",
-                report.outputs, report.written, report.unchanged
-            );
+            eprintln!("built {} files: {}", report.outputs, report.counts());
             Ok(())
         }
         Commands::Check => {

@@ -1010,7 +1010,10 @@ fn a_feed_of_a_section_without_dates_is_empty_not_an_error() {
     build_ok(&dir);
     let feed = read(&dir, "_site/en/notes/atom.xml");
     assert_eq!(feed.matches("<entry").count(), 0);
-    assert!(!feed.contains("<updated>"), "{feed}");
+    assert!(
+        feed.contains("<updated>1970-01-01T00:00:00+00:00</updated>"),
+        "Atom requires the element, and an empty feed has no date of its own:\n{feed}"
+    );
     assert!(feed.contains("<title>Example - Notes</title>"));
 }
 

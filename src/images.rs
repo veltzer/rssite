@@ -297,11 +297,7 @@ fn split_last(path: &str) -> (&str, &str) {
 /// image, and a build re-renders every output. `$XDG_CACHE_HOME/rssite/
 /// images` (`~/.cache/rssite/images`); `None` without either variable.
 fn cache_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
-    Some(base.join("rssite").join("images"))
+    crate::util::cache_dir("images")
 }
 
 /// The cache file of a variant of an image whose bytes are `source`: the
