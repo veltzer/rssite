@@ -79,6 +79,10 @@ quality = 80               # 1-100, for JPEG, WebP and AVIF
 sizes = "100vw"            # the sizes attribute: how wide the image is shown
 lazy = true                # loading="lazy"
 
+[prune]
+enabled = false            # a build removes every file in output_dir it did not plan
+keep = []                  # globs under output_dir for what other tools write there
+
 [feeds]
 limit = 20                 # newest entries per feed
 filename = "atom.xml"

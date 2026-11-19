@@ -74,6 +74,8 @@ pub struct Config {
     pub related: Related,
     #[serde(default)]
     pub images: Images,
+    #[serde(default)]
+    pub prune: Prune,
     /// Retired URLs, each written as a redirect page to where its content
     /// lives now. For URLs that are not a page's own `aliases`: a section
     /// that moved, a file that is gone, an address from an older site.
@@ -82,6 +84,29 @@ pub struct Config {
     /// Free-form values exposed to templates as `config.extra`.
     #[serde(default)]
     pub extra: toml::Table,
+}
+
+/// `[prune]`: the output directory as rssite's own. Off, a build removes
+/// only what the build before it wrote; on, it removes every file there that
+/// it did not plan and `keep` does not name, whatever wrote it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Prune {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Globs relative to the output directory (`*`, `**` and `?`) for what
+    /// other tools write there. Also what `clean --unknown` leaves alone.
+    #[serde(default)]
+    pub keep: Vec<String>,
+}
+
+impl Prune {
+    /// Whether `path`, relative to the output directory, is one to keep.
+    pub fn keeps(&self, path: &str) -> bool {
+        self.keep
+            .iter()
+            .any(|glob| crate::util::glob_match(glob, path).unwrap_or(true))
+    }
 }
 
 /// One `[[publish]]` entry: the files of `from` matching `files` are written
@@ -489,6 +514,15 @@ impl Config {
         }
         if self.languages.is_empty() {
             bail!("{CONFIG_FILE}: at least one [[languages]] entry is required");
+        }
+        for glob in &self.prune.keep {
+            if glob.is_empty() || glob.starts_with('/') {
+                bail!(
+                    "{CONFIG_FILE}: [prune] keep = {glob:?} must be a path relative to the output directory"
+                );
+            }
+            crate::util::glob_match(glob, "")
+                .with_context(|| format!("{CONFIG_FILE}: [prune] keep"))?;
         }
         if let Some(id) = &self.author_id {
             if id.trim().is_empty() {

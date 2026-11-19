@@ -41,7 +41,7 @@ Running `rssite` with no command prints this list.
 | `build` | Build the site, writing only the files whose content changed |
 | `check` | Render every page twice without writing anything: templates, links, translations, determinism |
 | `query` | Print the parsed site (pages, sections, taxonomies) as JSON |
-| `clean` | Remove every file the plan lists from the output directory |
+| `clean` | Remove every file the plan lists from the output directory; with `--unknown`, list the files there that the plan does not list |
 | `serve` | Build, serve the output directory on 127.0.0.1, rebuild when a source changes and reload open pages |
 | `init` | Write a minimal working site |
 | `version` | Print version and build details |
@@ -77,3 +77,10 @@ highlight.css              the syntax highlighting theme
 Nothing deletes the output directory. A build writes the planned files and leaves everything else alone, so other tools can write into the same tree. `rssite clean` removes exactly the planned files.
 
 A build also removes the files the previous build wrote that it no longer does: a deleted page does not stay behind to be deployed. It knows them from a record it keeps per output directory in `$XDG_CACHE_HOME/rssite/outputs` (`~/.cache/rssite/outputs`), outside the site; without that record (a first build, a fresh checkout, a cleared cache) it removes nothing, and it never touches a file it did not write.
+
+Two things reach the files that record does not know about:
+
+- `rssite clean --unknown` lists every file in the output directory that the plan does not list, one path per line, and removes nothing. Add `--execute` to remove them. Use it once after an upgrade or a lost cache, after reading the list: a file another tool wrote there is on it too, unless `[prune] keep` names it.
+- `[prune] enabled = true` in `rssite.toml` makes the output directory rssite's own: every build removes whatever is there that it did not plan and `keep` does not name, with no record involved. `keep` is a list of globs relative to the output directory for what other tools write into it. Leave this off when you cannot list those files: a file missing from `keep` is deleted on the next build.
+
+Both refuse to run when the output directory holds the site root or one of its source directories, since every source would then be an unknown file.

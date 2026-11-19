@@ -63,7 +63,15 @@ enum Commands {
     /// Print the parsed site (pages, sections, taxonomies) as JSON
     Query,
     /// Remove every file the plan lists from the output directory
-    Clean,
+    Clean {
+        /// Instead, list the files there that the plan does not list and
+        /// `[prune] keep` does not name
+        #[arg(long)]
+        unknown: bool,
+        /// With --unknown: remove the files listed
+        #[arg(long, requires = "unknown")]
+        execute: bool,
+    },
     /// Build, then serve the output directory, rebuilding when a source changes
     Serve {
         /// Port on 127.0.0.1
@@ -151,9 +159,26 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Query => render::query(&cli.root, cli.drafts),
-        Commands::Clean => {
+        Commands::Clean { unknown: false, .. } => {
             let removed = render::clean(&cli.root, cli.drafts)?;
             eprintln!("removed {removed} files");
+            Ok(())
+        }
+        Commands::Clean {
+            unknown: true,
+            execute,
+        } => {
+            let unknown = render::clean_unknown(&cli.root, cli.drafts, execute)?;
+            for path in &unknown {
+                println!("{path}");
+            }
+            match (unknown.len(), execute) {
+                (0, _) => eprintln!("no unknown files"),
+                (count, true) => eprintln!("removed {count} unknown files"),
+                (count, false) => eprintln!(
+                    "{count} unknown files; run `rssite clean --unknown --execute` to remove them"
+                ),
+            }
             Ok(())
         }
         Commands::Serve {

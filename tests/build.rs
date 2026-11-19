@@ -1332,3 +1332,107 @@ fn a_build_removes_what_the_last_one_wrote_and_this_one_does_not() {
     assert!(run(&dir, &["check"]).ok);
     assert!(dir.join("_site/kept.txt").is_file());
 }
+
+#[test]
+fn clean_unknown_lists_what_the_plan_does_not_and_removes_it_only_when_told() {
+    let dir = site("clean-unknown");
+    build_ok(&dir);
+    assert!(
+        run(&dir, &["clean", "--unknown"])
+            .stderr
+            .contains("no unknown files")
+    );
+    write(&dir, "_site/leftover.txt", "old");
+    write(&dir, "_site/en/blog/gone/index.html", "old page");
+    write(&dir, "_site/data/companies.json", "another tool's");
+    append_config(&dir, "[prune]\nkeep = [\"data/**\"]\n");
+    let listed = run(&dir, &["clean", "--unknown"]);
+    assert!(listed.ok, "{}", listed.stderr);
+    assert_eq!(listed.stdout, "en/blog/gone/index.html\nleftover.txt\n");
+    assert!(
+        listed
+            .stderr
+            .contains("2 unknown files; run `rssite clean --unknown --execute`"),
+        "{}",
+        listed.stderr
+    );
+    assert!(
+        dir.join("_site/leftover.txt").is_file(),
+        "listing removes nothing"
+    );
+    let before = files_under(&dir.join("_site")).len();
+    let removed = run(&dir, &["clean", "--unknown", "--execute"]);
+    assert!(removed.ok, "{}", removed.stderr);
+    assert!(
+        removed.stderr.contains("removed 2 unknown files"),
+        "{}",
+        removed.stderr
+    );
+    assert!(!dir.join("_site/leftover.txt").exists());
+    assert!(
+        !dir.join("_site/en/blog/gone").exists(),
+        "and the emptied directory"
+    );
+    assert_eq!(read(&dir, "_site/data/companies.json"), "another tool's");
+    assert_eq!(
+        files_under(&dir.join("_site")).len(),
+        before - 2,
+        "no planned file went"
+    );
+    let alone = run(&dir, &["clean", "--execute"]);
+    assert!(!alone.ok, "--execute is only for --unknown");
+}
+
+#[test]
+fn with_prune_on_a_build_removes_every_file_it_did_not_plan_or_keep() {
+    let dir = site("prune");
+    append_config(
+        &dir,
+        "[prune]\nenabled = true\nkeep = [\"data/**\", \"CNAME\"]\n",
+    );
+    // No record of an earlier build: these were never written by rssite.
+    write(&dir, "_site/leftover.txt", "old");
+    write(&dir, "_site/en/blog/gone/index.html", "old page");
+    write(&dir, "_site/data/deep/companies.json", "another tool's");
+    write(&dir, "_site/CNAME", "example.org");
+    let build = build_ok(&dir);
+    assert!(build.stderr.contains(", 2 removed"), "{}", build.stderr);
+    assert!(!dir.join("_site/leftover.txt").exists());
+    assert!(!dir.join("_site/en/blog/gone").exists());
+    assert_eq!(
+        read(&dir, "_site/data/deep/companies.json"),
+        "another tool's"
+    );
+    assert_eq!(read(&dir, "_site/CNAME"), "example.org");
+    assert!(dir.join("_site/en/blog/first/index.html").is_file());
+    // `check` writes nothing and removes nothing.
+    write(&dir, "_site/again.txt", "x");
+    assert!(run(&dir, &["check"]).ok);
+    assert!(dir.join("_site/again.txt").is_file());
+}
+
+#[test]
+fn unknown_files_are_not_removed_when_sources_live_in_the_output_directory() {
+    let dir = site("prune-sources");
+    prepend_config(&dir, "output_dir = \".\"");
+    append_config(&dir, "[prune]\nenabled = true\n");
+    let error = build_err(&dir);
+    assert!(error.contains("holds the site root"), "{error}");
+    assert!(
+        !dir.join("en").exists(),
+        "refused before anything was written"
+    );
+    assert!(dir.join("rssite.toml").is_file());
+    assert!(dir.join("content/blog/first.en.md").is_file());
+    let listed = run(&dir, &["clean", "--unknown"]);
+    assert!(!listed.ok);
+}
+
+#[test]
+fn a_keep_glob_must_be_relative_to_the_output_directory() {
+    expect_error(
+        "prune-keep",
+        |dir| append_config(dir, "[prune]\nkeep = [\"/data/**\"]\n"),
+        "[prune] keep = \"/data/**\" must be a path relative to the output directory",
+    );
+}

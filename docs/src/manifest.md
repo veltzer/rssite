@@ -45,7 +45,7 @@ predict_args    = ["plan"]
 output_dirs     = ["_site"]
 ```
 
-Each manifest entry becomes a product with its own cache entry, so an unchanged site runs nothing, an edited post rebuilds only the files that list it, and other processors can write into `_site/` beside rssite's files. That last point is why a build never deletes the output directory: `rssite clean` removes exactly the planned files and nothing else, and a build removes only what the build before it wrote and it no longer does.
+Each manifest entry becomes a product with its own cache entry, so an unchanged site runs nothing, an edited post rebuilds only the files that list it, and other processors can write into `_site/` beside rssite's files. That last point is why a build never deletes the output directory: `rssite clean` removes exactly the planned files and nothing else, and a build removes only what the build before it wrote and it no longer does. With `[prune] enabled = true` a build removes every file it did not plan, so those other processors' outputs must be listed in `[prune] keep`.
 
 ## Determinism
 

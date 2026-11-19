@@ -356,6 +356,10 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
     };
     if options.write {
         let output_dir = site.root.join(&site.config.output_dir);
+        if site.config.prune.enabled {
+            // Before anything is written, not after.
+            refuse_sources_in_output(&site, &output_dir)?;
+        }
         for (path, bytes) in &files {
             if crate::util::write_if_changed(&output_dir.join(path), bytes)? {
                 report.written += 1;
@@ -363,11 +367,19 @@ pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
                 report.unchanged += 1;
             }
         }
-        // What the last build wrote and this one does not: a deleted page,
-        // a renamed file. Anything else in the directory is not ours.
-        let previous = crate::record::load(&output_dir);
-        let stale = previous.iter().filter(|path| !files.contains_key(*path));
-        report.removed = remove_outputs(&output_dir, stale)?;
+        report.removed = if site.config.prune.enabled {
+            // The directory is ours: whatever is there that this build did
+            // not plan and `keep` does not name goes, whoever wrote it.
+            let unknown = unknown_files(&site, &output_dir, |path| files.contains_key(path))?;
+            remove_outputs(&output_dir, unknown.iter())?
+        } else {
+            // What the last build wrote and this one does not: a deleted
+            // page, a renamed file. Anything else in the directory is not
+            // ours.
+            let previous = crate::record::load(&output_dir);
+            let stale = previous.iter().filter(|path| !files.contains_key(*path));
+            remove_outputs(&output_dir, stale)?
+        };
         crate::record::save(&output_dir, files.keys());
     }
     Ok(report)
@@ -443,6 +455,94 @@ pub fn clean(root: &Path, drafts: bool) -> Result<usize> {
     let plan = Plan::compute(&site)?;
     let output_dir = site.root.join(&site.config.output_dir);
     remove_outputs(&output_dir, plan.outputs.iter().map(|o| &o.path))
+}
+
+/// The files in the output directory that the plan does not list and
+/// `[prune] keep` does not name, sorted; with `execute`, removed as well.
+pub fn clean_unknown(root: &Path, drafts: bool, execute: bool) -> Result<Vec<String>> {
+    let site = Site::load(root, drafts)?;
+    let plan = Plan::compute(&site)?;
+    let output_dir = site.root.join(&site.config.output_dir);
+    let planned: BTreeSet<&str> = plan.outputs.iter().map(|o| o.path.as_str()).collect();
+    let unknown = unknown_files(&site, &output_dir, |path| planned.contains(path))?;
+    if execute {
+        remove_outputs(&output_dir, unknown.iter())?;
+    }
+    Ok(unknown)
+}
+
+/// Every file under `output_dir` that is neither `planned` nor kept by
+/// `[prune] keep`, as sorted paths relative to it. A symlink to a directory
+/// is not followed: what it points at is not in the output directory.
+fn unknown_files(
+    site: &Site,
+    output_dir: &Path,
+    planned: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
+    if !output_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    refuse_sources_in_output(site, output_dir)?;
+    let mut unknown = Vec::new();
+    for entry in walkdir::WalkDir::new(output_dir).sort_by_file_name() {
+        let entry = entry.with_context(|| format!("walking {}", output_dir.display()))?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let relative = crate::util::rel(entry.path(), output_dir);
+        if !planned(&relative) && !site.config.prune.keeps(&relative) {
+            unknown.push(relative);
+        }
+    }
+    unknown.sort();
+    Ok(unknown)
+}
+
+/// Removing what is unknown is only safe when nothing the site is built
+/// from lives in the output directory: an `output_dir` of `.` would make
+/// every source an unknown file.
+fn refuse_sources_in_output(site: &Site, output_dir: &Path) -> Result<()> {
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let output = real(output_dir);
+    let config = &site.config;
+    let mut sources = vec![
+        (String::new(), site.root.clone()),
+        (
+            config.content_dir.clone(),
+            site.root.join(&config.content_dir),
+        ),
+        (
+            config.templates_dir.clone(),
+            site.root.join(&config.templates_dir),
+        ),
+        (
+            config.static_dir.clone(),
+            site.root.join(&config.static_dir),
+        ),
+        (config.sass_dir.clone(), site.root.join(&config.sass_dir)),
+        (config.i18n_dir.clone(), site.root.join(&config.i18n_dir)),
+        (
+            config.themes_dir.clone(),
+            site.root.join(&config.themes_dir),
+        ),
+    ];
+    for entry in &config.publish {
+        sources.push((entry.from.clone(), site.root.join(&entry.from)));
+    }
+    for (name, path) in sources {
+        if real(&path).starts_with(&output) {
+            let what = if name.is_empty() {
+                "the site root".to_owned()
+            } else {
+                format!("the source directory {name}")
+            };
+            bail!(
+                "the output directory {} holds {what}, so its unknown files cannot be told from sources; nothing was removed",
+                output_dir.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Remove the files at `paths` (relative to `output_dir`) that exist, and
