@@ -172,7 +172,8 @@ impl Templates {
 fn template_references(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"\{%-?\s*(?:extends|include|import)\s+"([^"]+)""#).expect("valid regex")
+        regex::Regex::new(r#"\{%-?\s*(?:extends|include|import)\s+["'`]([^"'`]+)["'`]"#)
+            .expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -182,8 +183,10 @@ fn template_references(text: &str) -> Vec<String> {
 pub fn load_data_paths(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"(?:load_data|get_image_metadata)\([^)]*\bpath\s*=\s*"([^"]+)""#)
-            .expect("valid regex")
+        regex::Regex::new(
+            r#"(?:load_data|get_image_metadata)\([^)]*\bpath\s*=\s*["'`]([^"'`]+)["'`]"#,
+        )
+        .expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -192,7 +195,7 @@ pub fn load_data_paths(text: &str) -> Vec<String> {
 pub fn content_url_paths(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r##"get_url\([^)]*\bpath\s*=\s*"@/([^"#]+)"##).expect("valid regex")
+        regex::Regex::new(r##"get_url\([^)]*\bpath\s*=\s*["'`]@/([^"'`#]+)"##).expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -497,7 +500,14 @@ impl Site {
         // section for every language.
         let mut seen_sections: BTreeMap<(Vec<String>, String), String> = BTreeMap::new();
         let mut drafted: BTreeSet<(Vec<String>, String)> = BTreeSet::new();
-        for file in files.iter().filter(|f| f.kind == FileKind::Index) {
+        // Every index is read before any section is made: a section goes
+        // with a drafted ancestor, and the files come in path order, where
+        // `blog/2024/_index.md` precedes `blog/_index.md`.
+        let indexes: Vec<&ContentFile> =
+            files.iter().filter(|f| f.kind == FileKind::Index).collect();
+        let mut fronts = Vec::with_capacity(indexes.len());
+        let mut own_drafts: BTreeSet<(Vec<String>, String)> = BTreeSet::new();
+        for file in &indexes {
             if let Some(other) = seen_sections.insert(
                 (file.components.clone(), file.lang.clone()),
                 file.rel.clone(),
@@ -515,9 +525,16 @@ impl Site {
             }
             let parsed = content::parse_section_front(file.front.clone())
                 .with_context(|| format!("content file {}", file.rel))?;
-            let ancestor_drafted = (0..=file.components.len())
-                .any(|n| drafted.contains(&(file.components[..n].to_vec(), file.lang.clone())));
-            if (parsed.front.draft && !self.drafts) || ancestor_drafted {
+            if parsed.front.draft && !self.drafts {
+                own_drafts.insert((file.components.clone(), file.lang.clone()));
+            }
+            fronts.push(parsed);
+        }
+        for (file, parsed) in indexes.into_iter().zip(fronts) {
+            // Its own draft flag or an ancestor's.
+            let is_drafted = (0..=file.components.len())
+                .any(|n| own_drafts.contains(&(file.components[..n].to_vec(), file.lang.clone())));
+            if is_drafted {
                 drafted.insert((file.components.clone(), file.lang.clone()));
                 continue;
             }
@@ -1381,7 +1398,7 @@ impl Site {
                 .map(|rel| format!("{content_dir}/{rel}"))
                 .chain(body.image_sources)
                 .collect();
-            self.images.extend(body.images);
+            self.add_images(body.images)?;
         }
         for i in 0..self.sections.len() {
             let source = self.sections[i].body_source.unwrap_or(i);
@@ -1413,7 +1430,26 @@ impl Site {
                 .map(|rel| format!("{content_dir}/{rel}"))
                 .chain(body.image_sources)
                 .collect();
-            self.images.extend(body.images);
+            self.add_images(body.images)?;
+        }
+        Ok(())
+    }
+
+    /// Record the image variants a body uses. Two images that would write
+    /// different bytes to one variant file (`logo.jpg` and `logo.png` both
+    /// offer `logo-480w.webp`) are an error, not one image shown twice.
+    fn add_images(&mut self, images: Vec<(String, crate::images::Variant)>) -> Result<()> {
+        for (path, variant) in images {
+            if let Some(other) = self.images.get(&path)
+                && *other != variant
+            {
+                bail!(
+                    "images {} and {} would both write the variant {path}; rename one of them",
+                    self.rel(&other.source),
+                    self.rel(&variant.source)
+                );
+            }
+            self.images.insert(path, variant);
         }
         Ok(())
     }
@@ -1482,9 +1518,7 @@ impl Site {
             BodyKind::Html => Ok(Body {
                 rendered: Rendered {
                     html: body.to_owned(),
-                    summary: body
-                        .find(markdown::SUMMARY_MARKER)
-                        .map(|at| body[..at].trim_end().to_owned()),
+                    summary: markdown::summary_of(body),
                     toc: Vec::new(),
                     word_count: body.split_whitespace().count(),
                     links: Vec::new(),
@@ -1736,6 +1770,20 @@ mod tests {
     }
 
     #[test]
+    fn references_in_any_tera_quote_are_found() {
+        let refs = template_references("{% extends 'base.html' %} {% include `part.html` %}");
+        assert_eq!(refs, vec!["base.html", "part.html"]);
+        assert_eq!(
+            load_data_paths("{{ load_data(path='data/a.toml') }} {{ load_data(path=`b.json`) }}"),
+            vec!["data/a.toml", "b.json"]
+        );
+        assert_eq!(
+            content_url_paths("{{ get_url(path='@/blog/post.md#top') }}"),
+            vec!["blog/post.md"]
+        );
+    }
+
+    #[test]
     fn cross_page_detection() {
         assert!(reads_other_pages("{{ get_section(path=\"x\") }}"));
         assert!(reads_other_pages("{% for p in section.pages %}"));
@@ -1792,8 +1840,8 @@ mod tests {
         );
         assert_eq!(
             refs,
-            vec!["base.html", "a.html", "m.html"],
-            "single quotes are not tracked"
+            vec!["base.html", "a.html", "m.html", "single.html"],
+            "Tera takes single quotes too, so they are tracked"
         );
     }
 

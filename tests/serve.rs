@@ -166,7 +166,11 @@ fn serve_redirects_directories_to_their_slash_form() {
     assert!(redirect.body.is_empty());
     let with_query = request(&server, "GET", "/en/blog?x=1");
     assert_eq!(with_query.status, "301 Moved Permanently");
-    assert_eq!(with_query.header("Location"), Some("/en/blog/"));
+    assert_eq!(
+        with_query.header("Location"),
+        Some("/en/blog/?x=1"),
+        "the query goes along"
+    );
     let file = request(&server, "GET", "/en/blog/index.html");
     assert_eq!(file.status, "200 OK", "a file is served as it is");
 }

@@ -212,9 +212,7 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                             crate::plan::strip_root(&page.path)
                         )
                     })?;
-                let summary = html
-                    .find(crate::markdown::SUMMARY_MARKER)
-                    .map(|at| html[..at].trim_end().to_owned());
+                let summary = crate::markdown::summary_of(&html);
                 let words = html.split_whitespace().count();
                 model.pages[i]["content"] = Value::String(html);
                 model.pages[i]["summary"] = match summary {
@@ -266,9 +264,7 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
                             crate::plan::strip_root(&section.path)
                         )
                     })?;
-                let summary = html
-                    .find(crate::markdown::SUMMARY_MARKER)
-                    .map(|at| html[..at].trim_end().to_owned());
+                let summary = crate::markdown::summary_of(&html);
                 let words = html.split_whitespace().count();
                 model.sections[s]["content"] = Value::String(html);
                 model.sections[s]["summary"] = match summary {
@@ -848,7 +844,6 @@ impl Renderer<'_> {
     fn render_sitemap(&mut self) -> Result<String> {
         let site = self.site;
         let mut entries: Vec<(String, Value)> = Vec::new();
-        entries.push((format!("{}/", site.config.base_url), json!({"permalink": format!("{}/", site.config.base_url), "updated": Value::Null, "alternates": []})));
         for page in &site.pages {
             let alternates: Vec<Value> = page.translations.iter().map(|&t| json!({"lang": site.pages[t].file.lang, "permalink": site.pages[t].permalink})).collect();
             let updated = page
@@ -930,6 +925,15 @@ impl Renderer<'_> {
                 }
             }
         }
+        // The site root, unless a language lives there and its root section
+        // already names it.
+        let root = format!("{}/", site.config.base_url);
+        if !entries.iter().any(|(permalink, _)| *permalink == root) {
+            entries.push((
+                root.clone(),
+                json!({"permalink": root, "updated": Value::Null, "alternates": []}),
+            ));
+        }
         entries.sort_by(|a, b| a.0.cmp(&b.0));
         let values: Vec<Value> = entries.into_iter().map(|(_, v)| v).collect();
         let fallback = site.config.fallback().to_owned();
@@ -972,7 +976,7 @@ fn insert_translations(context: &mut tera::Context, translations: &Value, site: 
 }
 
 /// `{lang: permalink}` for a translations list, so a language switcher is
-/// `alternates | get(key=entry.code, default=entry.url_prefix)` and no
+/// `alternates | get(key=entry.code, default=entry.permalink)` and no
 /// template has to juggle nested loops and `set_global`.
 fn alternates(translations: &Value) -> Value {
     let mut map = serde_json::Map::new();

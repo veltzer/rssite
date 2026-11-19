@@ -17,7 +17,9 @@ pub const ATOM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <title>{{ page.title }}</title>
     <published>{{ page.datetime }}</published>
     <updated>{{ page.updated_datetime }}</updated>
+{%- if config.author %}
     <author><name>{{ config.author }}</name></author>
+{%- endif %}
     <link rel="alternate" type="text/html" href="{{ page.permalink | safe }}"/>
     <id>{{ page.permalink | safe }}</id>
 {%- if page.summary %}
@@ -55,7 +57,7 @@ pub const NOT_FOUND: &str = r#"<!DOCTYPE html>
 </head>
 <body>
 <h1>404</h1>
-<p><a href="{{ language.url_prefix }}">{{ config.title }}</a></p>
+<p><a href="{{ language.permalink }}">{{ config.title }}</a></p>
 </body>
 </html>
 "#;
@@ -125,6 +127,7 @@ mod tests {
         let out = tera.render("atom.xml", &context).unwrap();
         assert_eq!(out.matches("<entry").count(), 2);
         assert_eq!(out.matches("<summary").count(), 1);
+        assert_eq!(out.matches("<author><name>A</name></author>").count(), 2);
         assert_eq!(out.matches("<content").count(), 1);
         assert!(out.contains("<updated>2026-01-01T00:00:00+00:00</updated>"));
         assert!(

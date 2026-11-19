@@ -27,11 +27,11 @@ Every template gets:
 
 - `config`: the whole configuration, `config.extra` included.
 - `lang`: the language code being rendered.
-- `language`: `{code, name, direction, url_prefix, title, description, generate_feeds, locale, date_format, date_format_long, is_fallback}`. `locale` is null unless the language sets it.
+- `language`: `{code, name, direction, url_prefix, permalink, title, description, generate_feeds, locale, date_format, date_format_long, is_fallback}`. `locale` is null unless the language sets it.
 - `languages`: the list of all languages, in configured order.
 - `current_path` and `current_url`.
 - `translations`: this document in every language it exists in, as a list of `{lang, permalink, path, title, current}` in configured language order; `current` is true for the language being rendered.
-- `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.url_prefix) }}`.
+- `alternates`: the same as a map from language code to permalink. A language switcher is one line: `{{ alternates | get(key=entry.code, default=entry.permalink) }}`.
 - `x_default`: the fallback language's version of this document, for `<link rel="alternate" hreflang="x-default">`; null when there is none.
 - `meta_description`: what the document says about itself in `<meta name="description">` and `og:description`. A page's is its `description`, else the start of its summary or text (160 characters at most, cut at a word); a section's is its `description`; anything else, and anything without one, gets the language's description, else the site's.
 - `git`: the commit the site root is checked out at, `{commit, short, date, year, dirty}`, or null outside git. `date` is the committer date, so `git.year` is a copyright year that does not depend on the build clock. A template that reads `git` lists `.git/HEAD`, the branch's ref and `.git/index` as sources, so a new commit rebuilds the pages that show it. `dirty` is the exception to the rule that every output is a function of its listed sources: an unstaged edit changes it without changing them.

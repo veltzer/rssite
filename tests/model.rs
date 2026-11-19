@@ -1607,3 +1607,88 @@ fn section_translation_key_root_feeds_drafts_body_from_and_duplicate_indexes_are
         "{error}"
     );
 }
+
+#[test]
+fn a_drafted_section_takes_every_subsection_with_it() {
+    // Directory names that sort before `_index` (digits, capitals) used to
+    // be read before the draft above them was known.
+    let dir = site("draft-subsections");
+    write(
+        &dir,
+        "content/wip/_index.en.md",
+        "+++\ntitle = \"WIP\"\ndraft = true\n+++\n",
+    );
+    for sub in ["2024", "Upper", "zzz"] {
+        write(
+            &dir,
+            &format!("content/wip/{sub}/_index.en.md"),
+            "+++\ntitle = \"Sub\"\n+++\n",
+        );
+        write(&dir, &format!("content/wip/{sub}/post.en.md"), POST);
+    }
+    build_ok(&dir);
+    assert!(!dir.join("_site/en/wip").exists());
+    assert!(!read(&dir, "_site/sitemap.xml").contains("/wip/"));
+    let drafts = run(&dir, &["--drafts", "build"]);
+    assert!(drafts.ok, "{}", drafts.stderr);
+    assert!(dir.join("_site/en/wip/2024/post/index.html").is_file());
+}
+
+#[test]
+fn the_sitemap_names_the_root_once_when_a_language_lives_there() {
+    let dir = single_language_site("root-sitemap");
+    edit_config(
+        &dir,
+        "name = \"English\"",
+        "name = \"English\"\nurl_prefix = \"/\"",
+    );
+    write(&dir, "templates/page.html", "page {{ page.title }}");
+    build_ok(&dir);
+    let sitemap = read(&dir, "_site/sitemap.xml");
+    let locs: Vec<&str> = sitemap.lines().filter(|l| l.contains("<loc>")).collect();
+    let unique: std::collections::BTreeSet<&str> = locs.iter().copied().collect();
+    assert_eq!(
+        locs.len(),
+        unique.len(),
+        "a URL is listed twice:\n{sitemap}"
+    );
+    assert!(locs.iter().any(|l| l.trim().ends_with("/blog/</loc>")));
+    // With every language under a prefix the bare root is still listed.
+    let prefixed = site("prefixed-sitemap");
+    build_ok(&prefixed);
+    let sitemap = read(&prefixed, "_site/sitemap.xml");
+    assert_eq!(
+        sitemap.matches("<loc>https://example.org/</loc>").count(),
+        1
+    );
+}
+
+#[test]
+fn an_output_cannot_be_a_file_and_a_directory() {
+    expect_error(
+        "file-and-directory",
+        |dir| {
+            write(
+                dir,
+                "content/blog/aliased.en.md",
+                "+++\ntitle = \"Aliased\"\ndate = 2026-05-01\naliases = [\"/en/blog/first.x\", \"/en/blog/first.x/deeper/\"]\n+++\nbody\n",
+            );
+        },
+        "would be both a file",
+    );
+}
+
+#[test]
+fn an_alias_cannot_leave_the_output_directory() {
+    expect_error(
+        "alias-escape",
+        |dir| {
+            write(
+                dir,
+                "content/blog/escaping.en.md",
+                "+++\ntitle = \"Escaping\"\ndate = 2026-05-01\naliases = [\"../../outside/\"]\n+++\nbody\n",
+            );
+        },
+        "must be a path inside the site",
+    );
+}

@@ -652,7 +652,10 @@ fn the_built_in_404_names_the_site_and_language() {
     build_ok(&dir);
     let he = read(&dir, "_site/he/404.html");
     assert!(he.contains("<html lang=\"he\" dir=\"rtl\">"), "{he}");
-    assert!(he.contains("<a href=\"/he/\">Example</a>"), "{he}");
+    assert!(
+        he.contains("<a href=\"https://example.org/he/\">Example</a>"),
+        "{he}"
+    );
     assert!(he.contains("<title>404 &middot; Example</title>"), "{he}");
 }
 
@@ -945,5 +948,55 @@ fn tera_bodies_populate_content_in_feeds_listings_and_get_page() {
         feed.contains("<summary type=\"html\">&lt;p&gt;Lead paragraph&lt;/p&gt;</summary>")
             && feed.contains("Rendered as a template: this page is called About"),
         "dated .tera page summary and content appear in the feed:\n{feed}"
+    );
+}
+
+#[test]
+fn a_template_body_is_escaped_like_a_template() {
+    let dir = site("tera-body-escape");
+    write(
+        &dir,
+        "content/blog/dynamic.en.tera",
+        "+++\ntitle = \"Tom & <b>Jerry</b>\"\ndate = 2026-06-01\n+++\n<p>{{ page.title }}|{{ page.title | safe }}</p>",
+    );
+    build_ok(&dir);
+    let html = read(&dir, "_site/en/blog/dynamic/index.html");
+    assert!(
+        html.contains("<p>Tom &amp; &lt;b&gt;Jerry&lt;/b&gt;|Tom & <b>Jerry</b></p>"),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_language_has_a_permalink_under_the_base_url() {
+    let dir = site("language-permalink");
+    edit_config(&dir, "https://example.org", "https://example.org/project");
+    write(
+        &dir,
+        "templates/404.html",
+        "{{ language.permalink }}|{% for entry in languages %}{{ entry.permalink }} {% endfor %}",
+    );
+    build_ok(&dir);
+    assert_eq!(
+        read(&dir, "_site/he/404.html"),
+        "https://example.org/project/he/|https://example.org/project/en/ https://example.org/project/he/ "
+    );
+}
+
+#[test]
+fn a_single_quoted_extends_is_a_source_of_the_page() {
+    let dir = site("quoted-extends");
+    let page = read(&dir, "templates/page.html");
+    assert!(page.contains("{% extends \"base.html\" %}"), "{page}");
+    write(
+        &dir,
+        "templates/page.html",
+        &page.replace("{% extends \"base.html\" %}", "{% extends 'base.html' %}"),
+    );
+    let plan = plan_of(&dir);
+    let sources = sources_of(&plan, "_site/en/blog/first/index.html");
+    assert!(
+        sources.contains(&"templates/base.html".to_owned()),
+        "{sources:?}"
     );
 }

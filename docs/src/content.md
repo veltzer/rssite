@@ -23,7 +23,7 @@ Three body kinds are supported, chosen by extension:
 
 - `.md`: markdown, rendered to HTML. Front matter is required.
 - `.html`: used as is. Front matter is optional. This is how a hand-written application page becomes a page of the site without being pretended into markdown.
-- `.tera`: the body is a Tera template rendered with the page's context, so it can call `trans()`, loop over data, or read `page.title`. Front matter is optional.
+- `.tera`: the body is a Tera template rendered with the page's context, so it can call `trans()`, loop over data, or read `page.title`. Front matter is optional. Values are escaped as in any template; `| safe` writes HTML as it is.
 
 ## Front matter
 
@@ -107,7 +107,7 @@ A markdown link to `@/blog/post.md` resolves to that post's permalink in the cur
 
 Headings get ids from their text (`## Heading one` becomes `heading-one`, a repeat becomes `heading-one-1`), and the page's table of contents is available to templates as `page.toc`.
 
-`<!-- more -->` in a body ends the summary; `page.summary` is the HTML before it, and feeds use it instead of the full content when present.
+`<!-- more -->` in a body ends the summary; `page.summary` is the HTML before it, and feeds use it instead of the full content when present. `<!--more-->` works too. A marker inside a list, a quote or a paragraph still gives well-formed HTML: the elements it cuts open are closed in the summary.
 
 ## Markdown
 
@@ -169,7 +169,7 @@ Anything *markdown* here.
 
 Arguments are `key=value` pairs separated by commas, and each value is a TOML value: a string in double or single quotes, a number, `true` or `false`, an array. The template sees each argument as a variable, plus `nth` (1 for the first call of that shortcode in the body, 2 for the next), `body` for a call with one (the raw text, which the template can pass through `markdown`), `page` or `section`, and everything else a page template has: `lang`, `config`, the functions. An argument named like one of those replaces it.
 
-A call alone on its line is a block: its output is not wrapped in a paragraph. A call in the middle of a line stays in its sentence. Calls inside code blocks and inline code are text, so a page can show the syntax; so is a `{{` or `{%` that is not followed by a name and an argument list. Calling a shortcode that has no template, arguments that are not TOML values, and a body call without its `{% end %}` each fail the build with the file, the line and what was expected. Calls do not nest.
+A call alone on its line is a block: its output is not wrapped in a paragraph. A call in the middle of a line stays in its sentence. Calls inside code blocks and inline code are text, so a page can show the syntax; so is a `{{` or `{%` that is not followed by a name and an argument list. Calling a shortcode that has no template, arguments that are not TOML values, and a body call without its `{% end %}` each fail the build with the file, the line and what was expected. So does a call where HTML cannot go, such as a link destination or an image's alt text. Calls do not nest.
 
 A page lists the templates of the shortcodes it calls (and what they include) as its sources, so editing a shortcode rebuilds the pages that call it. Shortcode output is part of the page's content and summary, and so of its feeds; it is not part of the text the page's meta description and search index entry are made from. The `markdown` template filter leaves calls as text.
 

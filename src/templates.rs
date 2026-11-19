@@ -295,6 +295,7 @@ pub fn language_view(site: &Site, code: &str) -> Value {
         "name": language.name,
         "direction": language.direction.as_str(),
         "url_prefix": language.prefix(),
+        "permalink": site.permalink(language.prefix()),
         "title": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
         "description": language.description.clone().unwrap_or_else(|| site.config.description.clone()),
         "generate_feeds": site.language_feeds(code),
@@ -518,6 +519,9 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
     // permalink into an entity soup. The five characters that matter are
     // escaped; a slash is not one of them.
     tera.set_escape_fn(crate::util::escape_html);
+    // Tera's own suffixes, plus the name it gives a `render_str` template:
+    // a `.tera` content body is escaped like the template that wraps it.
+    tera.autoescape_on(vec![".html", ".htm", ".xml", "__tera_one_off"]);
     let lang = lang.to_owned();
 
     for forbidden in ["now", "get_random", "get_env"] {

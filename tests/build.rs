@@ -1258,3 +1258,36 @@ fn templates_read_an_image_size_and_depend_on_the_image() {
             .contains(&"static/img/wide.png".to_owned())
     );
 }
+
+#[test]
+fn two_images_cannot_share_a_variant_file() {
+    let dir = image_site(
+        "image-collision",
+        "[images]\nenabled = true\nwidths = [200]\n",
+    );
+    image::RgbImage::from_fn(1000, 500, |_, _| image::Rgb([200, 0, 0]))
+        .save(dir.join("static/img/wide.webp"))
+        .unwrap();
+    // The same image twice is one variant, not a collision.
+    write(
+        &dir,
+        "content/blog/twice.en.md",
+        "+++\ntitle = \"Twice\"\ndate = 2026-05-02\n+++\n\n![One](/img/wide.png)\n\n![Two](/img/wide.png)\n",
+    );
+    build_ok(&dir);
+    // wide.png offers wide-200w.webp; so does wide.webp, as its own format.
+    write(
+        &dir,
+        "content/blog/clash.en.md",
+        "+++\ntitle = \"Clash\"\ndate = 2026-05-03\n+++\n\n![Other](/img/wide.webp)\n",
+    );
+    let build = run(&dir, &["check"]);
+    assert!(!build.ok, "expected a variant collision to fail");
+    assert!(
+        build
+            .stderr
+            .contains("would both write the variant img/wide-200w.webp"),
+        "{}",
+        build.stderr
+    );
+}

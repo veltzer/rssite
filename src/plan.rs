@@ -643,6 +643,24 @@ impl Plan {
                 );
             }
         }
+        // A path cannot be a file and a directory: the alias `/v1.2` next
+        // to the page `/v1.2/` would fail in the middle of the writes.
+        let by_path: std::collections::BTreeMap<&str, &Output> =
+            outputs.iter().map(|o| (o.path.as_str(), o)).collect();
+        for output in &outputs {
+            let mut dir = output.path.as_str();
+            while let Some((parent, _)) = dir.rsplit_once('/') {
+                if let Some(file) = by_path.get(parent) {
+                    bail!(
+                        "{parent} would be both a file ({}) and a directory holding {} ({})",
+                        describe(site, &file.kind),
+                        output.path,
+                        describe(site, &output.kind)
+                    );
+                }
+                dir = parent;
+            }
+        }
         Ok(Plan { outputs })
     }
 }

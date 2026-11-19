@@ -18,7 +18,55 @@ use syntect::html::{
 };
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
-pub const SUMMARY_MARKER: &str = "<!-- more -->";
+/// Elements that have no end tag, so a summary never has to close them.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
+
+/// The summary of rendered `html`: what precedes its `<!-- more -->`
+/// (`<!--more-->` and any other spacing work too), or `None` without one. A marker inside a list, a quote or a paragraph cuts
+/// the HTML with elements still open; they are closed, so a summary dropped
+/// into a listing or a feed does not swallow what follows it.
+pub fn summary_of(html: &str) -> Option<String> {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"<!--\s*more\s*-->").expect("valid regex"));
+    let at = re.find(html)?.start();
+    let mut summary = html[..at].trim_end().to_owned();
+    let mut open: Vec<String> = Vec::new();
+    let mut rest = summary.as_str();
+    while let Some(start) = rest.find('<') {
+        rest = &rest[start..];
+        if rest.starts_with("<!--") {
+            rest = rest.find("-->").map_or("", |end| &rest[end + 3..]);
+            continue;
+        }
+        let Some(end) = rest.find('>') else { break };
+        let tag = &rest[1..end];
+        rest = &rest[end + 1..];
+        let closing = tag.starts_with('/');
+        let name: String = tag
+            .trim_start_matches('/')
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        if closing {
+            if let Some(position) = open.iter().rposition(|o| *o == name) {
+                open.truncate(position);
+            }
+        } else if !tag.ends_with('/') && !VOID_ELEMENTS.contains(&name.as_str()) {
+            open.push(name);
+        }
+    }
+    for name in open.iter().rev() {
+        summary.push_str(&format!("</{name}>"));
+    }
+    Some(summary)
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Heading {
@@ -361,6 +409,7 @@ pub fn render_with_images(
     let mut word_count = 0usize;
     let mut headings: Vec<(u8, String, String)> = Vec::new();
     let mut used_ids: BTreeMap<String, usize> = BTreeMap::new();
+    let mut taken_ids: BTreeSet<String> = BTreeSet::new();
     let mut heading: Option<(u8, Option<String>, String, usize)> = None;
     let mut code: Option<(Fence, String)> = None;
     let mut image: Option<OpenImage> = None;
@@ -449,12 +498,19 @@ pub fn render_with_images(
                     base
                 };
                 let count = used_ids.entry(base.clone()).or_insert(0);
-                let id = if *count == 0 {
+                let mut id = if *count == 0 {
                     base.clone()
                 } else {
                     format!("{base}-{count}")
                 };
                 *count += 1;
+                // A numbered id can be one a heading already has: `a`, `a`
+                // and then a heading titled `a-1`.
+                while taken_ids.contains(&id) {
+                    id = format!("{base}-{count}");
+                    *count += 1;
+                }
+                taken_ids.insert(id.clone());
                 if let Event::Start(Tag::Heading { id: slot, .. }) = &mut events[start] {
                     *slot = Some(CowStr::from(id.clone()));
                 }
@@ -558,9 +614,19 @@ pub fn render_with_images(
 
     let mut html = String::with_capacity(markdown.len() * 3 / 2);
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
-    let summary = html
-        .find(SUMMARY_MARKER)
-        .map(|at| html[..at].trim_end().to_owned());
+    // A call's marker is an HTML comment, which only survives where HTML can
+    // go. In a link destination or an image's alt text it is escaped or
+    // dropped, and its output would have nowhere to land.
+    for (index, call) in shortcodes.iter().enumerate() {
+        if !html.contains(&crate::shortcode::marker(index)) {
+            bail!(
+                "shortcode {} (call {} of it) is used where its output cannot go: a link destination, a title or an image's alt text",
+                call.name,
+                call.nth
+            );
+        }
+    }
+    let summary = summary_of(&html);
     links.sort();
     links.dedup();
     Ok(Rendered {
@@ -835,6 +901,50 @@ mod tests {
         assert_eq!(out.toc.len(), 3);
         assert_eq!(out.toc[0].id, "start");
         assert_eq!(out.toc[0].title, "Intro");
+    }
+
+    #[test]
+    fn a_numbered_heading_id_never_repeats_one_already_taken() {
+        let out = render("## a\n\n## a\n\n## a-1\n\n## a\n", &opts(), &no_links).unwrap();
+        let ids: Vec<&str> = out.toc.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["a", "a-1", "a-1-1", "a-2"], "{}", out.html);
+    }
+
+    #[test]
+    fn the_summary_marker_takes_any_spacing_and_closes_what_it_cuts() {
+        let tight = render("first\n\n<!--more-->\n\nrest\n", &opts(), &no_links).unwrap();
+        assert_eq!(tight.summary.as_deref(), Some("<p>first</p>"));
+        let nested = render(
+            "- one *two*\n  <!-- more -->\n- three\n",
+            &opts(),
+            &no_links,
+        )
+        .unwrap();
+        assert_eq!(
+            nested.summary.as_deref(),
+            Some("<ul>\n<li>one <em>two</em></li></ul>")
+        );
+        assert_eq!(
+            summary_of("<p>a<br>b <img src=\"x\" /> <!-- c --> d<!-- more -->e</p>").as_deref(),
+            Some("<p>a<br>b <img src=\"x\" /> <!-- c --> d</p>"),
+            "void elements and comments are not left open"
+        );
+        assert_eq!(summary_of("<p>no marker</p>"), None);
+    }
+
+    #[test]
+    fn a_shortcode_where_html_cannot_go_is_an_error() {
+        let with = RenderOptions {
+            shortcodes: Some(["u".to_owned()].into_iter().collect()),
+            ..opts()
+        };
+        let fine = render("see {{ u() }} here\n", &with, &no_links).unwrap();
+        assert!(fine.html.contains(&crate::shortcode::marker(0)));
+        let error = render("[link]({{ u() }})\n", &with, &no_links)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("shortcode u"), "{error}");
+        assert!(error.contains("link destination"), "{error}");
     }
 
     #[test]

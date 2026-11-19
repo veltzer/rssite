@@ -232,11 +232,12 @@ fn percent_decode(text: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        // Byte by byte: slicing the text could cut a character in two.
+        let hex = |at: usize| bytes.get(at).and_then(|b| char::from(*b).to_digit(16));
         if bytes[i] == b'%'
-            && i + 2 < bytes.len()
-            && let Ok(value) = u8::from_str_radix(&text[i + 1..i + 3], 16)
+            && let (Some(high), Some(low)) = (hex(i + 1), hex(i + 2))
         {
-            out.push(value);
+            out.push((high * 16 + low) as u8);
             i += 3;
             continue;
         }
@@ -313,7 +314,11 @@ fn handle(mut stream: TcpStream, dir: &Path, generation: Option<u64>) -> std::io
     // resolve against the parent; redirect like a real static host does.
     let bare = request_path.split('?').next().unwrap_or("/");
     if !bare.ends_with('/') && target_of(dir, bare).is_some_and(|t| t.is_dir()) {
-        let location = format!("{bare}/");
+        // The query goes along: `/en?x=1` is `/en/?x=1`.
+        let location = match request_path.split_once('?') {
+            Some((_, query)) => format!("{bare}/?{query}"),
+            None => format!("{bare}/"),
+        };
         let response = format!(
             "HTTP/1.1 301 Moved Permanently\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -395,6 +400,12 @@ mod tests {
             "invalid utf-8 is replaced"
         );
         assert_eq!(percent_decode(""), "");
+        assert_eq!(
+            percent_decode("/%a\u{e9}"),
+            "/%a\u{e9}",
+            "a sequence running into a multi-byte character is kept, not a panic"
+        );
+        assert_eq!(percent_decode("%+1"), "%+1", "a sign is not a hex digit");
     }
 
     #[test]

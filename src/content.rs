@@ -315,6 +315,15 @@ fn take_date(table: &mut toml::Table, key: &str) -> Result<Option<DateValue>> {
     }
 }
 
+/// An alias is a path the build writes a redirect at, so it stays inside the
+/// site: no `..` to climb out of the output directory, and no other host.
+fn check_alias(key: &str, alias: &str) -> Result<()> {
+    if alias.contains("://") || alias.split(['/', '\\']).any(|part| part == "..") {
+        bail!("front matter: {key} = {alias:?} must be a path inside the site");
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub struct ParsedPageFront {
     pub front: PageFront,
@@ -328,6 +337,9 @@ pub fn parse_page_front(mut table: toml::Table) -> Result<ParsedPageFront> {
     let front: PageFront = toml::Value::Table(table)
         .try_into()
         .context("front matter")?;
+    for alias in &front.aliases {
+        check_alias("aliases", alias)?;
+    }
     Ok(ParsedPageFront {
         front,
         date,
@@ -350,6 +362,12 @@ pub fn parse_section_front(mut table: toml::Table) -> Result<ParsedSectionFront>
         .try_into()
         .context("front matter")?;
     check_cascade(&front.cascade)?;
+    for alias in &front.aliases {
+        check_alias("aliases", alias)?;
+    }
+    if let Some(pattern) = &front.pager_aliases {
+        check_alias("pager_aliases", pattern)?;
+    }
     front.paginate_path = front.paginate_path.trim_matches('/').to_owned();
     if front.paginate_path.is_empty() || front.paginate_path.split('/').any(|p| p == "..") {
         bail!(
@@ -505,6 +523,24 @@ mod tests {
             parsed.updated.unwrap().rfc3339(),
             "2026-05-01T10:00:00+02:00"
         );
+    }
+
+    #[test]
+    fn an_alias_stays_inside_the_site() {
+        let page = |aliases: &str| {
+            let table: toml::Table =
+                toml::from_str(&format!("title = \"t\"\naliases = [{aliases}]")).unwrap();
+            parse_page_front(table)
+        };
+        assert!(page("\"/old/\", \"legacy/file.html\", \"/v1..2/\"").is_ok());
+        for bad in ["\"../../x/\"", "\"/a/../../x\"", "\"https://e.org/x\""] {
+            let error = format!("{:#}", page(bad).unwrap_err());
+            assert!(error.contains("must be a path inside the site"), "{error}");
+        }
+        let section = |text: &str| parse_section_front(toml::from_str(text).unwrap());
+        assert!(section("aliases = [\"/old/\"]\npager_aliases = \"/page/{n}/\"").is_ok());
+        assert!(section("aliases = [\"../x\"]").is_err());
+        assert!(section("pager_aliases = \"../page/{n}/\"").is_err());
     }
 
     #[test]

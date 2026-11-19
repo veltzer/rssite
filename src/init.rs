@@ -66,7 +66,7 @@ months = ["January", "February", "March", "April", "May", "June", "July", "Augus
 </head>
 <body>
 <header>
-  <a href="{{ language.url_prefix }}">{{ language.title }}</a>
+  <a href="{{ language.permalink }}">{{ language.title }}</a>
   <nav>
     <a href="{{ get_url(path="@/blog/_index.md") }}">{{ trans(key="nav_blog") }}</a>
     <a href="{{ get_url(path=language.url_prefix ~ "tags/") }}">{{ trans(key="nav_tags") }}</a>
@@ -76,7 +76,7 @@ months = ["January", "February", "March", "April", "May", "June", "July", "Augus
         home when it has no translation. `alternates` maps language code
         to permalink. -#}
     {%- for entry in languages %}
-    <a href="{{ alternates | get(key=entry.code, default=entry.url_prefix) }}" hreflang="{{ entry.code }}"{% if entry.code == lang %} aria-current="true"{% endif %}>{{ entry.name }}</a>
+    <a href="{{ alternates | get(key=entry.code, default=entry.permalink) }}" hreflang="{{ entry.code }}"{% if entry.code == lang %} aria-current="true"{% endif %}>{{ entry.name }}</a>
     {%- endfor %}
   </nav>
 </header>
