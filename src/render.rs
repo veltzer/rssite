@@ -506,12 +506,7 @@ impl Renderer<'_> {
                     .position(|s| s.lang == lang && s.is_root())
                     .expect("root section");
                 let alternate = self.site.sections[root].permalink.clone();
-                let title = self
-                    .site
-                    .config
-                    .language(&lang)
-                    .and_then(|l| l.title.clone())
-                    .unwrap_or_else(|| self.site.config.title.clone());
+                let title = self.site.config.language_title(&lang).to_owned();
                 // The language's own feed path, also for the copy at the site
                 // root (feeds.root): the two are the same feed, byte for
                 // byte, and a reader following its self link moves to the
@@ -533,7 +528,11 @@ impl Renderer<'_> {
             Kind::SectionFeed(s) => {
                 let section = &self.site.sections[*s];
                 let lang = section.lang.clone();
-                let title = format!("{} - {}", self.site.config.title, section.title());
+                let title = format!(
+                    "{} - {}",
+                    self.site.config.language_title(&lang),
+                    section.title()
+                );
                 let alternate = section.permalink.clone();
                 let pages = section.pages.clone();
                 let view = self.model.sections[*s].clone();
@@ -551,7 +550,7 @@ impl Renderer<'_> {
                 let model = &self.site.taxonomies[*taxonomy];
                 let t = &model.terms[*term];
                 let lang = model.lang.clone();
-                let title = format!("{} - {}", self.site.config.title, t.name);
+                let title = format!("{} - {}", self.site.config.language_title(&lang), t.name);
                 let alternate = t.permalink.clone();
                 let pages = t.pages.clone();
                 let view = self.model.taxonomies[*taxonomy]["terms"][*term].clone();

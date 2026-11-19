@@ -34,6 +34,7 @@ name = "English"
 direction = "ltr"          # or "rtl"; templates get it as language.direction
 title = "My site"          # optional, defaults to the top-level title
 description = "..."        # optional
+author = "Me"              # optional: the author's name as this language writes it
 generate_feeds = true      # default true: /en/atom.xml
 url_prefix = "/en/"        # default "/<code>/"
 locale = "en_US"           # optional; templates get it as language.locale

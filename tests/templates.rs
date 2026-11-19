@@ -624,11 +624,11 @@ fn a_site_can_replace_every_built_in_template() {
     );
     assert_eq!(
         read(&dir, "_site/en/blog/atom.xml"),
-        "custom feed Example - Blog 2"
+        "custom feed Example site - Blog 2"
     );
     assert_eq!(
         read(&dir, "_site/en/tags/linux/atom.xml"),
-        "custom feed Example - linux 1"
+        "custom feed Example site - linux 1"
     );
     assert!(read(&dir, "_site/sitemap.xml").starts_with("custom sitemap "));
     assert_eq!(read(&dir, "_site/en/404.html"), "custom 404 en /en/");
@@ -653,10 +653,13 @@ fn the_built_in_404_names_the_site_and_language() {
     let he = read(&dir, "_site/he/404.html");
     assert!(he.contains("<html lang=\"he\" dir=\"rtl\">"), "{he}");
     assert!(
-        he.contains("<a href=\"https://example.org/he/\">Example</a>"),
+        he.contains("<a href=\"https://example.org/he/\">אתר לדוגמה</a>"),
         "{he}"
     );
-    assert!(he.contains("<title>404 &middot; Example</title>"), "{he}");
+    assert!(
+        he.contains("<title>404 &middot; אתר לדוגמה</title>"),
+        "{he}"
+    );
 }
 
 #[test]

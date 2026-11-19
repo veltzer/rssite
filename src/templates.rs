@@ -123,12 +123,13 @@ pub fn page_json_ld(site: &Site, i: usize, meta_description: &Value) -> String {
         "inLanguage": lang,
         "isPartOf": {
             "@type": "WebSite",
-            "name": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
+            "name": site.config.language_title(lang),
             "url": site.permalink(language.prefix()),
         },
     });
-    if !site.config.author.is_empty() {
-        value["author"] = json!({"@type": "Person", "name": site.config.author});
+    let author = site.config.language_author(lang);
+    if !author.is_empty() {
+        value["author"] = json!({"@type": "Person", "name": author});
         if let Some(id) = &site.config.author_id {
             value["author"]["@id"] = json!(id);
         }
@@ -303,7 +304,8 @@ pub fn language_view(site: &Site, code: &str) -> Value {
         "direction": language.direction.as_str(),
         "url_prefix": language.prefix(),
         "permalink": site.permalink(language.prefix()),
-        "title": language.title.clone().unwrap_or_else(|| site.config.title.clone()),
+        "title": site.config.language_title(code),
+        "author": site.config.language_author(code),
         "description": language.description.clone().unwrap_or_else(|| site.config.description.clone()),
         "generate_feeds": site.language_feeds(code),
         "locale": language.locale,

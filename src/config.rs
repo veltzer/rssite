@@ -123,6 +123,10 @@ pub struct Language {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// The author's name as this language writes it; defaults to the
+    /// top-level author.
+    #[serde(default)]
+    pub author: Option<String>,
     #[serde(default = "default_true")]
     pub generate_feeds: bool,
     /// URL prefix, `/{code}/` by default. Must start and end with `/`.
@@ -675,6 +679,22 @@ impl Config {
 
     pub fn language(&self, code: &str) -> Option<&Language> {
         self.languages.iter().find(|l| l.code == code)
+    }
+
+    /// The site's title in a language: the language's own, else the
+    /// top-level one.
+    pub fn language_title(&self, code: &str) -> &str {
+        self.language(code)
+            .and_then(|l| l.title.as_deref())
+            .unwrap_or(&self.title)
+    }
+
+    /// The author's name in a language: the language's own, else the
+    /// top-level one.
+    pub fn language_author(&self, code: &str) -> &str {
+        self.language(code)
+            .and_then(|l| l.author.as_deref())
+            .unwrap_or(&self.author)
     }
 
     pub fn language_codes(&self) -> Vec<String> {

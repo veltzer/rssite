@@ -17,8 +17,8 @@ pub const ATOM: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <title>{{ page.title }}</title>
     <published>{{ page.datetime }}</published>
     <updated>{{ page.updated_datetime }}</updated>
-{%- if config.author %}
-    <author><name>{{ config.author }}</name></author>
+{%- if language.author %}
+    <author><name>{{ language.author }}</name></author>
 {%- endif %}
     <link rel="alternate" type="text/html" href="{{ page.permalink | safe }}"/>
     <id>{{ page.permalink | safe }}</id>
@@ -53,11 +53,11 @@ pub const NOT_FOUND: &str = r#"<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>404 &middot; {{ config.title }}</title>
+<title>404 &middot; {{ language.title }}</title>
 </head>
 <body>
 <h1>404</h1>
-<p><a href="{{ language.permalink }}">{{ config.title }}</a></p>
+<p><a href="{{ language.permalink }}">{{ language.title }}</a></p>
 </body>
 </html>
 "#;
@@ -116,7 +116,7 @@ mod tests {
         context.insert("feed_url", "https://x/en/atom.xml");
         context.insert("feed_alternate", "https://x/en/");
         context.insert("last_updated", &Some("2026-01-01T00:00:00+00:00"));
-        context.insert("config", &serde_json::json!({"author": "A"}));
+        context.insert("language", &serde_json::json!({"author": "A"}));
         context.insert(
             "pages",
             &serde_json::json!([

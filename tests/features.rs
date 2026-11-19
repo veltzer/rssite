@@ -524,6 +524,41 @@ fn json_ld_names_the_author_by_id_and_the_page_by_its_image() {
 }
 
 #[test]
+fn a_language_names_the_site_and_the_author_in_its_own_feeds() {
+    let dir = site("language-author");
+    edit_config(
+        &dir,
+        "title = \"אתר לדוגמה\"",
+        "title = \"אתר לדוגמה\"\nauthor = \"מחבר לדוגמה\"",
+    );
+    write(
+        &dir,
+        "templates/page.html",
+        "<probe>{{ json_ld | safe }}</probe><author>{{ language.author }}</author>",
+    );
+    build_ok(&dir);
+    // The language's feed, a term's and the page's JSON-LD all use the
+    // language's own title and author; the English ones keep the top-level
+    // author.
+    let hebrew = read(&dir, "_site/he/atom.xml");
+    assert!(hebrew.contains("<title>אתר לדוגמה</title>"), "{hebrew}");
+    assert!(hebrew.contains("<author><name>מחבר לדוגמה</name></author>"));
+    assert!(!hebrew.contains("Example"), "{hebrew}");
+    let term = read(&dir, "_site/he/tags/דת/atom.xml");
+    assert!(term.contains("<title>אתר לדוגמה - דת</title>"), "{term}");
+    assert!(!term.contains("Example"), "{term}");
+    let page = read(&dir, "_site/he/blog/first/index.html");
+    let value: serde_json::Value = serde_json::from_str(&extract_probe(&page)).expect("JSON");
+    assert_eq!(value["author"]["name"], "מחבר לדוגמה");
+    assert!(page.contains("<author>מחבר לדוגמה</author>"));
+    let english = read(&dir, "_site/en/atom.xml");
+    assert!(english.contains("<author><name>Example Author</name></author>"));
+    assert!(
+        read(&dir, "_site/en/blog/first/index.html").contains("<author>Example Author</author>")
+    );
+}
+
+#[test]
 fn a_bad_image_or_author_id_is_an_error() {
     for (image, error) in [
         (

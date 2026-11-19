@@ -993,7 +993,7 @@ fn feeds_are_a_window_of_dated_pages_newest_first() {
     assert!(dir.join("_site/en/tags/religion/feed.xml").is_file());
     let term_feed = read(&dir, "_site/en/tags/religion/feed.xml");
     assert_eq!(term_feed.matches("<entry").count(), 3);
-    assert!(term_feed.contains("<title>Example - religion</title>"));
+    assert!(term_feed.contains("<title>Example site - religion</title>"));
     assert!(term_feed.contains("href=\"https://example.org/en/tags/religion/feed.xml\""));
 }
 
@@ -1014,7 +1014,7 @@ fn a_feed_of_a_section_without_dates_is_empty_not_an_error() {
         feed.contains("<updated>1970-01-01T00:00:00+00:00</updated>"),
         "Atom requires the element, and an empty feed has no date of its own:\n{feed}"
     );
-    assert!(feed.contains("<title>Example - Notes</title>"));
+    assert!(feed.contains("<title>Example site - Notes</title>"));
 }
 
 // ── sitemap and robots ────────────────────────────────────────────────────

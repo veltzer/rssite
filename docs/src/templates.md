@@ -27,7 +27,7 @@ Every template gets:
 
 - `config`: the whole configuration, `config.extra` included.
 - `lang`: the language code being rendered.
-- `language`: `{code, name, direction, url_prefix, permalink, title, description, generate_feeds, locale, date_format, date_format_long, is_fallback}`. `locale` is null unless the language sets it.
+- `language`: `{code, name, direction, url_prefix, permalink, title, author, description, generate_feeds, locale, date_format, date_format_long, is_fallback}`. `locale` is null unless the language sets it. `title`, `author` and `description` are the language's own, or the top-level ones when it sets none; feeds (a section's and a term's too) and a page's JSON-LD name the site and the author with them.
 - `languages`: the list of all languages, in configured order.
 - `current_path` and `current_url`.
 - `translations`: this document in every language it exists in, as a list of `{lang, permalink, path, title, current}` in configured language order; `current` is true for the language being rendered.
