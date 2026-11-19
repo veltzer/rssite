@@ -75,6 +75,9 @@ enum Commands {
         /// Do not reload open pages in the browser after a rebuild
         #[arg(long)]
         no_reload: bool,
+        /// Leave `base_url` in served pages instead of pointing it at this server
+        #[arg(long)]
+        keep_base_url: bool,
     },
     /// Write a minimal working site into a directory
     Init {
@@ -157,12 +160,14 @@ fn run(cli: Cli) -> Result<()> {
             port,
             no_watch,
             no_reload,
+            keep_base_url,
         } => serve::serve(
             &cli.root,
             cli.drafts,
             port,
             !no_watch,
             !no_watch && !no_reload,
+            !keep_base_url,
         ),
         Commands::Init { dir } => {
             let dir = dir.unwrap_or_else(|| cli.root.clone());

@@ -3,6 +3,11 @@
 //! injected into the files: what is on disk is what would be deployed. With
 //! live reload on, an HTML response carries one more `<script>`, which polls
 //! the build generation and reloads the page when a rebuild succeeded.
+//!
+//! The build writes `base_url` into every absolute link, so a page served
+//! here would send the reader to the live site on the first click. A text
+//! response therefore has `base_url` replaced by the address the request came
+//! to, again in the response only; `--keep-base-url` turns that off.
 
 use crate::config::Config;
 use anyhow::{Context, Result};
@@ -18,13 +23,36 @@ use std::time::{Duration, SystemTime};
 /// site writes.
 const GENERATION_PATH: &str = "/__rssite/generation";
 
-pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) -> Result<()> {
+/// What a request is answered from: both follow the config when it changes.
+#[derive(Clone)]
+struct Served {
+    dir: PathBuf,
+    base_url: String,
+}
+
+impl Served {
+    fn of(root: &Path, config: &Config) -> Served {
+        Served {
+            dir: root.join(&config.output_dir),
+            base_url: config.base_url.clone(),
+        }
+    }
+}
+
+pub fn serve(
+    root: &Path,
+    drafts: bool,
+    port: u16,
+    watch: bool,
+    reload: bool,
+    rewrite: bool,
+) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("site root {}", root.display()))?;
     let config = Config::load(&root)?;
     let initial_output_dir = root.join(&config.output_dir);
-    let output_dir = Arc::new(RwLock::new(initial_output_dir.clone()));
+    let served = Arc::new(RwLock::new(Served::of(&root, &config)));
     // Bumped by every successful rebuild; open pages reload when it moves.
     let generation = Arc::new(AtomicU64::new(0));
     build(&root, drafts);
@@ -36,7 +64,7 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) ->
     );
     if watch {
         let root = root.clone();
-        let output_dir = Arc::clone(&output_dir);
+        let served = Arc::clone(&served);
         let generation = Arc::clone(&generation);
         std::thread::spawn(move || {
             let mut current_config = config;
@@ -44,8 +72,8 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) ->
             loop {
                 std::thread::sleep(Duration::from_millis(500));
                 if let Ok(reloaded) = Config::load(&root) {
-                    if let Ok(mut out) = output_dir.write() {
-                        *out = root.join(&reloaded.output_dir);
+                    if let Ok(mut out) = served.write() {
+                        *out = Served::of(&root, &reloaded);
                     }
                     current_config = reloaded;
                 }
@@ -56,8 +84,8 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) ->
                         generation.fetch_add(1, Ordering::SeqCst);
                     }
                     if let Ok(reloaded) = Config::load(&root) {
-                        if let Ok(mut out) = output_dir.write() {
-                            *out = root.join(&reloaded.output_dir);
+                        if let Ok(mut out) = served.write() {
+                            *out = Served::of(&root, &reloaded);
                         }
                         current_config = reloaded;
                     }
@@ -68,10 +96,11 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: bool, reload: bool) ->
     }
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let dir = output_dir.read().expect("output_dir lock").clone();
+        let served = served.read().expect("served lock").clone();
         let generation = reload.then(|| generation.load(Ordering::SeqCst));
         std::thread::spawn(move || {
-            let _ = handle(stream, &dir, generation);
+            let base_url = rewrite.then_some(served.base_url.as_str());
+            let _ = handle(stream, &served.dir, generation, base_url, port);
         });
     }
     Ok(())
@@ -120,6 +149,63 @@ fn inject(body: &[u8], script: &str) -> Vec<u8> {
     out.extend_from_slice(&body[..at]);
     out.extend_from_slice(script.as_bytes());
     out.extend_from_slice(&body[at..]);
+    out
+}
+
+/// Whether a response of this content type is text that can carry links.
+fn is_text(kind: &str) -> bool {
+    kind.starts_with("text/")
+        || kind == "application/json"
+        || kind == "application/xml"
+        || kind == "image/svg+xml"
+}
+
+/// The origin a request came to, from its `Host` header: `http://` plus the
+/// header when it is a plain host and optional port, else the address the
+/// server listens on. Whatever the reader typed (`localhost`, a forwarded
+/// port) is then where the links keep them.
+fn local_origin(host: Option<&str>, port: u16) -> String {
+    let plain = |h: &&str| {
+        !h.is_empty()
+            && h.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
+    };
+    match host.map(str::trim).filter(plain) {
+        Some(host) => format!("http://{host}"),
+        None => format!("http://127.0.0.1:{port}"),
+    }
+}
+
+/// `body` with every `base_url` replaced by `origin`. A match must end where
+/// the URL's host or path segment ends: `https://x.org` is not replaced in
+/// `https://x.org.uk`, `https://x.org:8443` or, for a base with a path, in
+/// `https://x.org/site2`.
+fn rewrite_base_url(body: &[u8], base_url: &str, origin: &str) -> Vec<u8> {
+    let base = base_url.as_bytes();
+    if base.is_empty() {
+        return body.to_vec();
+    }
+    let mut out = Vec::with_capacity(body.len());
+    let mut i = 0;
+    while i < body.len() {
+        if body[i..].starts_with(base) {
+            let after = body.get(i + base.len()).copied();
+            let continues = match after {
+                Some(b) if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' => true,
+                Some(b':') => body
+                    .get(i + base.len() + 1)
+                    .is_some_and(|b| b.is_ascii_digit()),
+                _ => false,
+            };
+            if !continues {
+                out.extend_from_slice(origin.as_bytes());
+                i += base.len();
+                continue;
+            }
+        }
+        out.push(body[i]);
+        i += 1;
+    }
     out
 }
 
@@ -270,13 +356,27 @@ fn resolve(dir: &Path, request_path: &str) -> Option<PathBuf> {
 }
 
 /// Serve one request. `generation` is the current build generation when live
-/// reload is on: HTML responses then carry the reload script.
-fn handle(mut stream: TcpStream, dir: &Path, generation: Option<u64>) -> std::io::Result<()> {
+/// reload is on: HTML responses then carry the reload script. `base_url` is
+/// the site's when links are to stay on this server: text responses then have
+/// it replaced by the address the request came to.
+fn handle(
+    mut stream: TcpStream,
+    dir: &Path,
+    generation: Option<u64>,
+    base_url: Option<&str>,
+    port: u16,
+) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
+    let mut host = None;
     let mut line = String::new();
     while reader.read_line(&mut line)? > 0 && line != "\r\n" && line != "\n" {
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("host")
+        {
+            host = Some(value.trim().to_owned());
+        }
         line.clear();
     }
     let mut parts = request_line.split_whitespace();
@@ -303,9 +403,19 @@ fn handle(mut stream: TcpStream, dir: &Path, generation: Option<u64>) -> std::io
             method == "HEAD",
         );
     }
-    let with_reload = |kind: &str, body: Vec<u8>| match generation {
-        Some(current) if kind.starts_with("text/html") => inject(&body, &reload_script(current)),
-        _ => body,
+    let with_reload = |kind: &str, body: Vec<u8>| {
+        let body = match base_url {
+            Some(base) if is_text(kind) => {
+                rewrite_base_url(&body, base, &local_origin(host.as_deref(), port))
+            }
+            _ => body,
+        };
+        match generation {
+            Some(current) if kind.starts_with("text/html") => {
+                inject(&body, &reload_script(current))
+            }
+            _ => body,
+        }
     };
     // A directory URL without a trailing slash would make relative links
     // resolve against the parent; redirect like a real static host does.
@@ -375,6 +485,79 @@ mod tests {
             b"<p></body>x<s></BODY></html>"
         );
         assert_eq!(inject(b"<p>no end", "<s>"), b"<p>no end<s>");
+    }
+
+    #[test]
+    fn the_base_url_is_replaced_only_where_it_ends() {
+        let to = "http://127.0.0.1:8000";
+        let rewrite = |body: &str, base: &str| {
+            String::from_utf8(rewrite_base_url(body.as_bytes(), base, to)).unwrap()
+        };
+        assert_eq!(
+            rewrite(
+                "<a href=\"https://x.org/en/\">https://x.org</a> https://x.org",
+                "https://x.org"
+            ),
+            "<a href=\"http://127.0.0.1:8000/en/\">http://127.0.0.1:8000</a> http://127.0.0.1:8000"
+        );
+        for other in [
+            "https://x.org.uk/",
+            "https://x.org-b/",
+            "https://x.organic/",
+            "https://x.org:8443/",
+            "http://x.org/",
+        ] {
+            assert_eq!(rewrite(other, "https://x.org"), other);
+        }
+        assert_eq!(
+            rewrite("https://x.org: see", "https://x.org"),
+            "http://127.0.0.1:8000: see",
+            "a colon that starts no port ends the URL"
+        );
+        assert_eq!(
+            rewrite(
+                "https://x.org/site/a https://x.org/site2/ https://x.org/",
+                "https://x.org/site"
+            ),
+            "http://127.0.0.1:8000/a https://x.org/site2/ https://x.org/",
+            "a base with a path maps to the root, where the files are"
+        );
+        assert_eq!(
+            rewrite("דת https://x.org/דת", "https://x.org"),
+            "דת http://127.0.0.1:8000/דת"
+        );
+    }
+
+    #[test]
+    fn the_local_origin_follows_the_host_header() {
+        assert_eq!(
+            local_origin(Some("localhost:8000"), 8000),
+            "http://localhost:8000"
+        );
+        assert_eq!(local_origin(Some(" [::1]:9 "), 8000), "http://[::1]:9");
+        assert_eq!(local_origin(None, 8000), "http://127.0.0.1:8000");
+        assert_eq!(local_origin(Some(""), 8000), "http://127.0.0.1:8000");
+        assert_eq!(
+            local_origin(Some("x\"><script>"), 8000),
+            "http://127.0.0.1:8000",
+            "a header that is not a host is not written into pages"
+        );
+    }
+
+    #[test]
+    fn text_responses_are_the_ones_rewritten() {
+        for kind in ["html", "css", "js", "json", "xml", "txt", "svg"] {
+            assert!(
+                is_text(content_type(Path::new(&format!("a.{kind}")))),
+                "{kind}"
+            );
+        }
+        for kind in ["png", "woff2", "pdf", "bin"] {
+            assert!(
+                !is_text(content_type(Path::new(&format!("a.{kind}")))),
+                "{kind}"
+            );
+        }
     }
 
     #[test]

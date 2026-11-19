@@ -46,7 +46,9 @@ Running `rssite` with no command prints this list.
 | `init` | Write a minimal working site |
 | `version` | Print version and build details |
 
-Two flags apply to every command: `-C <dir>` runs against a site root other than the current directory, and `--drafts` includes pages and sections marked `draft = true`. `build` takes `--plan` to print the manifest as well, and `--verify-determinism` to render everything twice and fail if any file differs. `serve` takes `--port` (default 8000), `--no-watch` to serve without rebuilding, and `--no-reload` to keep open pages from reloading after a rebuild. The reload works by adding one `<script>` to each HTML response, never to the files: what is on disk is what would be deployed.
+Two flags apply to every command: `-C <dir>` runs against a site root other than the current directory, and `--drafts` includes pages and sections marked `draft = true`. `build` takes `--plan` to print the manifest as well, and `--verify-determinism` to render everything twice and fail if any file differs. `serve` takes `--port` (default 8000), `--no-watch` to serve without rebuilding, `--no-reload` to keep open pages from reloading after a rebuild, and `--keep-base-url` to leave the site's absolute links pointing at `base_url`. The reload works by adding one `<script>` to each HTML response, never to the files: what is on disk is what would be deployed.
+
+The build writes `base_url` into every permalink, so a served page would otherwise send you to the live site on the first click. `serve` therefore replaces `base_url` with its own address (the one in your browser's address bar) in every text response: HTML, CSS, JavaScript, JSON, XML, SVG and plain text. Like the reload script, this is done to the response and never to the files. A `base_url` with a path (`https://example.org/site`) maps to the server's root, which is where the output directory is served from.
 
 ## What a build writes
 

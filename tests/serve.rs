@@ -1,7 +1,8 @@
 //! `rssite serve`, end to end: it builds, serves exactly the output
 //! directory, redirects directory URLs to their slash form, answers 404
 //! with the site's page, refuses what is not GET or HEAD, rebuilds when a
-//! source changes, and tells open pages to reload after a good rebuild.
+//! source changes, tells open pages to reload after a good rebuild, and
+//! points the site's own absolute links at itself.
 
 mod common;
 
@@ -82,6 +83,15 @@ impl Response {
     }
 }
 
+/// What `rssite serve` answers for a file of the fixture: its `base_url`
+/// replaced by the server's own address.
+fn served(server: &Server, text: &str) -> String {
+    text.replace(
+        "https://example.org",
+        &format!("http://127.0.0.1:{}", server.port),
+    )
+}
+
 fn request(server: &Server, method: &str, path: &str) -> Response {
     let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     stream
@@ -89,7 +99,8 @@ fn request(server: &Server, method: &str, path: &str) -> Response {
         .unwrap();
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        server.port
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -132,7 +143,10 @@ fn serve_builds_and_serves_the_output_directory() {
         Some("text/html; charset=utf-8")
     );
     assert_eq!(root.header("Cache-Control"), Some("no-store"));
-    assert_eq!(root.text(), read(&dir, "_site/index.html"));
+    assert_eq!(
+        root.text(),
+        served(&server, &read(&dir, "_site/index.html"))
+    );
     assert_eq!(
         root.header("Content-Length"),
         Some(root.body.len().to_string().as_str())
@@ -186,7 +200,10 @@ fn serve_answers_404_with_the_site_page_and_refuses_other_methods() {
         missing.header("Content-Type"),
         Some("text/html; charset=utf-8")
     );
-    assert_eq!(missing.text(), read(&dir, "_site/404.html"));
+    assert_eq!(
+        missing.text(),
+        served(&server, &read(&dir, "_site/404.html"))
+    );
     let traversal = request(&server, "GET", "/../rssite.toml");
     assert_eq!(traversal.status, "404 Not Found");
     assert!(!traversal.text().contains("base_url"));
@@ -199,7 +216,12 @@ fn serve_answers_404_with_the_site_page_and_refuses_other_methods() {
     assert!(head.body.is_empty(), "HEAD has no body");
     assert_eq!(
         head.header("Content-Length"),
-        Some(read(&dir, "_site/en/index.html").len().to_string().as_str())
+        Some(
+            served(&server, &read(&dir, "_site/en/index.html"))
+                .len()
+                .to_string()
+                .as_str()
+        )
     );
     let head_missing = request(&server, "HEAD", "/nope/");
     assert_eq!(head_missing.status, "404 Not Found");
@@ -282,15 +304,47 @@ fn serve_rebuilds_when_a_source_changes() {
 #[test]
 fn serve_without_reload_serves_the_files_as_they_are() {
     let dir = site("serve-no-reload");
-    let server = serve_with(&dir, &["--no-reload"]);
+    let server = serve_with(&dir, &["--no-reload", "--keep-base-url"]);
     assert_eq!(
         request(&server, "GET", "/en/blog/third/").text(),
         read(&dir, "_site/en/blog/third/index.html")
     );
     assert_eq!(
+        request(&server, "GET", "/404.html").text(),
+        read(&dir, "_site/404.html"),
+        "with --keep-base-url the links stay the deployed ones"
+    );
+    assert_eq!(
         request(&server, "GET", "/__rssite/generation").status,
         "404 Not Found"
     );
+}
+
+#[test]
+fn serve_points_the_base_url_at_itself_in_responses_only() {
+    let dir = site("serve-base-url");
+    let server = serve(&dir, false);
+    let own = format!("http://127.0.0.1:{}", server.port);
+    let on_disk = read(&dir, "_site/404.html");
+    assert!(
+        on_disk.contains("href=\"https://example.org/en/\""),
+        "the file keeps the deployed link:\n{on_disk}"
+    );
+    let page = request(&server, "GET", "/404.html");
+    assert!(
+        page.text().contains(&format!("href=\"{own}/en/\"")),
+        "{}",
+        page.text()
+    );
+    assert!(!page.text().contains("https://example.org"));
+    assert_eq!(
+        page.header("Content-Length"),
+        Some(page.body.len().to_string().as_str())
+    );
+    let sitemap = request(&server, "GET", "/sitemap.xml").text();
+    assert!(sitemap.contains(&format!("<loc>{own}/en/")), "{sitemap}");
+    assert!(!sitemap.contains("https://example.org"), "{sitemap}");
+    assert_eq!(read(&dir, "_site/404.html"), on_disk, "never the file");
 }
 
 #[test]

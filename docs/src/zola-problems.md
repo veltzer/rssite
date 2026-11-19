@@ -219,7 +219,7 @@ rssite: config schema is versioned, old keys produce an error naming the new one
 
 `zola serve` serves from an in-memory build, runs none of the steps around zola, injects a livereload script, and handles trailing slashes slightly differently from a static host. The site has its own `serve.py` that runs the full build and serves `_site/` with a dumb static server, because that is the only faithful preview.
 
-rssite: `serve` serves the real output directory produced by the real build, with reload as the only addition.
+rssite: `serve` serves the real output directory produced by the real build. Two things are added, both to the responses and never to the files: the reload script, and the site's own `base_url` pointed at the server so that links stay on the preview.
 
 ### Front matter is not queryable
 
