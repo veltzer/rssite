@@ -285,14 +285,25 @@ fn build_reports_counts_and_writes_only_what_changed() {
     let one = build_ok(&dir);
     assert!(one.stderr.contains("1 written"), "{}", one.stderr);
     assert_eq!(read(&dir, "_site/favicon.svg"), "<svg>new</svg>");
+    let before = read(&dir, "_site/en/blog/first/index.html");
     write(&dir, "sass/_vars.scss", "$width: 50rem;");
     let css = build_ok(&dir);
-    assert!(
-        css.stderr.contains("1 written"),
-        "a partial change rewrites the one stylesheet:\n{}",
-        css.stderr
-    );
     assert!(read(&dir, "_site/style.css").contains("50rem"));
+    // Every page links the stylesheet by a hash of its bytes, so the pages
+    // are rewritten with it; the stylesheet's own output is one of them.
+    let after = read(&dir, "_site/en/blog/first/index.html");
+    assert_ne!(before, after, "the page names the new stylesheet");
+    assert!(!css.stderr.contains(" 0 written"), "{}", css.stderr);
+    // Without cache-busting a partial rewrites only the stylesheet.
+    prepend_config(&dir, "cachebust = false\n");
+    build_ok(&dir);
+    write(&dir, "sass/_vars.scss", "$width: 52rem;");
+    let one = build_ok(&dir);
+    assert!(
+        one.stderr.contains("1 written"),
+        "a partial change rewrites the one stylesheet:\n{}",
+        one.stderr
+    );
 }
 
 #[test]

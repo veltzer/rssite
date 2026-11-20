@@ -582,6 +582,15 @@ impl Renderer<'_> {
     }
 
     fn render(&mut self, output: &Output) -> Result<Vec<u8>> {
+        // What `get_url` may cache-bust while this output renders: the files
+        // the plan lists among its sources, and no other.
+        self.model.set_scope(Some(output.sources.clone()));
+        let bytes = self.render_unscoped(output);
+        self.model.set_scope(None);
+        bytes
+    }
+
+    fn render_unscoped(&mut self, output: &Output) -> Result<Vec<u8>> {
         Ok(match &output.kind {
             Kind::Page(i) => self.render_page(*i)?.into_bytes(),
             Kind::Section { section, pager } => self.render_section(*section, *pager)?.into_bytes(),
@@ -711,13 +720,8 @@ impl Renderer<'_> {
             Kind::Sass(path) => {
                 // The site's sass directory first, then the theme's, so an
                 // `@use "x"` finds the site's override before the theme's.
-                let mut options = grass::Options::default()
-                    .load_path(self.site.root.join(&self.site.config.sass_dir));
-                if let Some(theme) = self.site.theme_dir() {
-                    options = options.load_path(theme.join(&self.site.config.sass_dir));
-                }
-                grass::from_path(path, &options)
-                    .map_err(|e| anyhow::anyhow!("compiling {}: {e}", self.site.rel(path)))?
+                crate::util::compile_sass(path, &self.site.sass_load_paths())
+                    .with_context(|| format!("compiling {}", self.site.rel(path)))?
                     .into_bytes()
             }
             Kind::Image(path) => crate::images::encode(&self.site.images[path])?,

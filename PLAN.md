@@ -25,22 +25,21 @@ right-to-left pages, emoji shortcodes, a section's `[cascade]` of front
 matter to everything below it, shortcodes (templates called from
 markdown), and image processing (`[images]`: smaller widths, WebP and AVIF,
 `srcset`, `width` and `height`, lazy loading). The [demo site](demos/) shows each of them.
+Cache-busting asset URLs (`style.css?h=<hash>`, on by default) are documented
+in [Templates](docs/src/templates.md#cache-busting).
 
 ## Bigger features
 
-1. **Cache-busting asset URLs**: `style.css?h=abc123` (zola's
-   `cachebust=true`) or fingerprinted file names (Hugo's `fingerprint`).
-   Today a changed stylesheet can be served stale from browser caches.
-2. **Minification** of HTML, CSS and inline JS: `minify_html` in zola,
+1. **Minification** of HTML, CSS and inline JS: `minify_html` in zola,
    `--minify` in Hugo. On a site of about 1,200 pages it saves real bytes.
-3. **Scheduled posts**: a future-dated post stays out unless `--future` is
+2. **Scheduled posts**: a future-dated post stays out unless `--future` is
    given, as in Hugo and Jekyll. To keep builds reproducible the cutoff has to
    be a plan input, for example `SOURCE_DATE_EPOCH`, which `src/build_info.rs`
    already reads.
-4. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
+3. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
    bilingual site it writes both `.en.md` and `.he.md` with matching front
    matter.
-5. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
+4. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
    preview deploys and local builds that should not point at the production
    host.
 
@@ -84,7 +83,6 @@ look were done.
 
 ## Where to start
 
-Cache-busting asset URLs and minification are the next gaps against zola
-and Hugo. Processing images in templates (zola's `resize_image`) waits on a
+Minification is the next gap against zola and Hugo. Processing images in templates (zola's `resize_image`) waits on a
 way to put a template's images in the plan before rendering; markdown images
 are processed. Privacy-friendly embeds can now be written as shortcodes.

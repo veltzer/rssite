@@ -136,6 +136,41 @@ pub struct Published {
     pub source: String,
 }
 
+/// A file whose bytes are known before anything is rendered, so `get_url`
+/// can name it by a hash of its content: a static file, a published one, or
+/// a compiled stylesheet.
+#[derive(Clone, Debug)]
+pub struct Bustable {
+    pub target: BustTarget,
+    /// The plan's sources of the file, relative to the site root: what a
+    /// page that links it by hash must list among its own.
+    pub sources: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum BustTarget {
+    /// Copied as it is.
+    File(PathBuf),
+    /// A Sass entry point, compiled.
+    Sass(PathBuf),
+}
+
+/// The stylesheet a Sass file below the sass root compiles to, or `None`
+/// for a partial (`_x.scss`, or anything under a `_dir/`) and a file that
+/// is not Sass.
+pub fn sass_output(rel: &str) -> Option<String> {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let is_partial = rel.split('/').any(|part| part.starts_with('_'));
+    let is_sass = name.ends_with(".scss") || name.ends_with(".sass");
+    if is_partial || !is_sass {
+        return None;
+    }
+    Some(format!(
+        "{}.css",
+        rel.rsplit_once('.').map(|(s, _)| s).unwrap_or(rel)
+    ))
+}
+
 impl Templates {
     /// Every user template reachable from `name` through extends, include
     /// and import, `name` itself included when it is a user template.
@@ -200,6 +235,48 @@ pub fn content_url_paths(text: &str) -> Vec<String> {
         regex::Regex::new(r##"get_url\([^)]*\bpath\s*=\s*["'`]@/([^"'`#]+)"##).expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
+}
+
+/// The literal paths of `get_url` calls that cache-bust: the whole `path`
+/// argument a single string, not `@/` content, and the call's own
+/// `cachebust=` (or, without one, `default`) true. A computed path is not
+/// one: which file it names is only known while rendering, and `get_url`
+/// leaves such a URL as it is unless the plan already lists the file.
+pub fn busted_url_paths(text: &str, default: bool) -> Vec<String> {
+    static CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static PATH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static FLAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let call = CALL.get_or_init(|| regex::Regex::new(r"get_url\(([^)]*)\)").expect("valid regex"));
+    let path = PATH.get_or_init(|| {
+        regex::Regex::new(r#"(?:^|[\s,])path\s*=\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)\s*(?:,|$)"#)
+            .expect("valid regex")
+    });
+    let flag = FLAG.get_or_init(|| {
+        regex::Regex::new(r"(?:^|[\s,])cachebust\s*=\s*(true|false)\b").expect("valid regex")
+    });
+    let mut out = Vec::new();
+    for c in call.captures_iter(text) {
+        let args = c[1].trim();
+        let wanted = flag
+            .captures(args)
+            .map(|f| &f[1] == "true")
+            .unwrap_or(default);
+        if !wanted {
+            continue;
+        }
+        if let Some(p) = path.captures(args) {
+            let literal = p
+                .get(1)
+                .or(p.get(2))
+                .or(p.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            if !literal.starts_with("@/") && !literal.is_empty() {
+                out.push(literal.trim_start_matches('/').to_owned());
+            }
+        }
+    }
+    out
 }
 
 /// Whether a template reads other pages, which makes the output depend on
@@ -293,6 +370,8 @@ pub struct Site {
     pub build: crate::build_info::BuildInfo,
     /// The image variants markdown bodies use, by output path.
     pub images: BTreeMap<String, crate::images::Variant>,
+    /// The files `get_url` can cache-bust, by output path.
+    pub bustable: BTreeMap<String, Bustable>,
 }
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
@@ -382,6 +461,7 @@ impl Site {
             git: None,
             build: crate::build_info::BuildInfo::now(),
             images: BTreeMap::new(),
+            bustable: BTreeMap::new(),
         };
         site.content_files = files
             .iter()
@@ -402,11 +482,52 @@ impl Site {
         site.static_files = site.layered_files(&site.config.static_dir)?;
         site.sass_files = site.layered_files(&site.config.sass_dir)?;
         site.published = site.published_files()?;
+        site.bustable = site.bustable_files();
         if site.config.images.enabled {
             crate::images::check(&site.config.images)?;
         }
         site.render_bodies()?;
         Ok(site)
+    }
+
+    /// The files whose bytes are known before rendering, by output path.
+    /// Static files first, then published ones, then stylesheets: the
+    /// order the plan lists them in, so a later one never hides an earlier.
+    fn bustable_files(&self) -> BTreeMap<String, Bustable> {
+        let mut out = BTreeMap::new();
+        for file in &self.static_files {
+            out.entry(file.rel.clone()).or_insert_with(|| Bustable {
+                target: BustTarget::File(file.path.clone()),
+                sources: BTreeSet::from([self.rel(&file.path)]),
+            });
+        }
+        for file in &self.published {
+            out.entry(file.out.clone()).or_insert_with(|| Bustable {
+                target: BustTarget::File(file.path.clone()),
+                sources: BTreeSet::from([file.source.clone()]),
+            });
+        }
+        let sass_sources: BTreeSet<String> =
+            self.sass_files.iter().map(|f| self.rel(&f.path)).collect();
+        for file in &self.sass_files {
+            if let Some(css) = sass_output(&file.rel) {
+                out.entry(css).or_insert_with(|| Bustable {
+                    target: BustTarget::Sass(file.path.clone()),
+                    sources: sass_sources.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Where `@use` looks for a Sass file: the site's sass directory, then
+    /// the theme's.
+    pub fn sass_load_paths(&self) -> Vec<PathBuf> {
+        let mut paths = vec![self.root.join(&self.config.sass_dir)];
+        if let Some(theme) = self.theme_dir() {
+            paths.push(theme.join(&self.config.sass_dir));
+        }
+        paths
     }
 
     /// The theme's directory, when a theme is configured.
@@ -1713,6 +1834,13 @@ impl Site {
                 out.push(format!("{}/{rel}", self.config.content_dir));
             }
         }
+        // A literal path `get_url` cache-busts: the hash in the URL changes
+        // with the file, so the page depends on the file's sources.
+        for path in busted_url_paths(text, self.config.cachebust) {
+            if let Some(bustable) = self.bustable.get(&path) {
+                out.extend(bustable.sources.iter().cloned());
+            }
+        }
         out
     }
 
@@ -1865,6 +1993,28 @@ mod tests {
             "{{ get_url(lang=\"he\", path=\"@/blog/post.md#top\") }} {{ get_url(path=\"style.css\") }}",
         );
         assert_eq!(urls, vec!["blog/post.md"]);
+    }
+
+    #[test]
+    fn busted_url_paths_are_whole_literals() {
+        let text = "{{ get_url(path='style.css') }} {{ get_url(path=\"/a/b.js\", check=false) }} \
+            {{ get_url(path='data/' ~ lang ~ '.json') }} {{ get_url(path=x) }} \
+            {{ get_url(path=\"@/blog/post.md\") }} {{ get_url(cachebust=false, path='off.css') }} \
+            {{ get_url( path = `c.css` , cachebust = true ) }}";
+        assert_eq!(
+            busted_url_paths(text, true),
+            vec!["style.css", "a/b.js", "c.css"]
+        );
+        assert_eq!(busted_url_paths(text, false), vec!["c.css"]);
+    }
+
+    #[test]
+    fn sass_outputs_skip_partials() {
+        assert_eq!(sass_output("style.scss").as_deref(), Some("style.css"));
+        assert_eq!(sass_output("a/b.sass").as_deref(), Some("a/b.css"));
+        assert_eq!(sass_output("_vars.scss"), None);
+        assert_eq!(sass_output("_lib/x.scss"), None);
+        assert_eq!(sass_output("notes.txt"), None);
     }
 
     #[test]

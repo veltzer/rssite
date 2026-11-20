@@ -220,6 +220,28 @@ pub fn cache_dir(kind: &str) -> Option<PathBuf> {
 /// Print `text` and a newline on stdout. A reader that closed the pipe
 /// (`rssite plan | head`) is not an error: the output ends there, quietly,
 /// where `println!` would panic.
+/// A short, stable name for `bytes`: 64-bit FNV-1a as 16 hex digits. It
+/// names a file's content in a cache-busting URL, so it only has to change
+/// when the bytes do, and to be the same on every machine and every release;
+/// it is not a defence against anyone choosing bytes to collide.
+pub fn content_hash(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Compile a Sass entry point, finding `@use`d files along `load_paths`.
+pub fn compile_sass(path: &Path, load_paths: &[PathBuf]) -> Result<String> {
+    let mut options = grass::Options::default();
+    for dir in load_paths {
+        options = options.load_path(dir);
+    }
+    grass::from_path(path, &options).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
 pub fn emit(text: &str) -> Result<()> {
     use std::io::Write;
     let stdout = std::io::stdout();
@@ -462,5 +484,14 @@ mod tests {
             read(Path::new("/nonexistent/rssite/file")).unwrap_err()
         );
         assert!(error.contains("/nonexistent/rssite/file"), "{error}");
+    }
+
+    #[test]
+    fn content_hash_is_fnv1a_64() {
+        // The published FNV-1a test vectors: the hash must never change, or
+        // every cached file would be fetched again for nothing.
+        assert_eq!(super::content_hash(b""), "cbf29ce484222325");
+        assert_eq!(super::content_hash(b"a"), "af63dc4c8601ec8c");
+        assert_eq!(super::content_hash(b"foobar"), "85944171f73967e8");
     }
 }

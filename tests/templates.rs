@@ -260,7 +260,105 @@ fn get_url_resolves_content_static_and_directories() {
     );
     assert_eq!(
         out,
-        "https://example.org/en/blog/second/|https://example.org/he/blog/second/|https://example.org/he/blog/second/|https://example.org/en/blog/|https://example.org/style.css|https://example.org/style.css|https://example.org/en/blog|https://example.org/en/tags/|https://example.org/sitemap.xml"
+        "https://example.org/en/blog/second/|https://example.org/he/blog/second/|https://example.org/he/blog/second/|https://example.org/en/blog/|https://example.org/style.css?h=19fccdd689bcfe5f|https://example.org/style.css?h=19fccdd689bcfe5f|https://example.org/en/blog|https://example.org/en/tags/|https://example.org/sitemap.xml"
+    );
+}
+
+#[test]
+fn get_url_names_a_static_or_sass_file_by_its_content() {
+    let dir = site("fn-get-url-bust");
+    write_probe(
+        &dir,
+        "{{ get_url(path=\"style.css\") }}|{{ get_url(path=\"favicon.svg\") }}|{{ get_url(path=\"favicon.svg\", cachebust=false) }}|{{ get_url(path=\"sitemap.xml\") }}|{{ get_url(path=\"@/blog/second.md\") }}",
+    );
+    build_ok(&dir);
+    let first = extract_probe(&read(&dir, "_site/en/blog/first/index.html"));
+    let parts: Vec<&str> = first.split('|').collect();
+    let hash = |url: &str| url.split_once("?h=").map(|(_, h)| h.to_owned());
+    let css = hash(parts[0]).expect("the stylesheet is busted");
+    assert_eq!(css.len(), 16, "{first}");
+    assert!(css.chars().all(|c| c.is_ascii_hexdigit()), "{first}");
+    assert!(
+        parts[1].starts_with("https://example.org/favicon.svg?h="),
+        "{first}"
+    );
+    assert_eq!(
+        parts[2], "https://example.org/favicon.svg",
+        "cachebust=false opts out"
+    );
+    assert_eq!(
+        parts[3], "https://example.org/sitemap.xml",
+        "a rendered file is never busted"
+    );
+    assert_eq!(parts[4], "https://example.org/en/blog/second/");
+    // The page lists what its URLs hash, so a build system rebuilds it.
+    let sources = sources_of(&plan_of(&dir), "_site/en/blog/first/index.html");
+    for source in ["sass/style.scss", "sass/_vars.scss", "static/favicon.svg"] {
+        assert!(
+            sources.iter().any(|s| s == source),
+            "{source} in {sources:?}"
+        );
+    }
+    // A partial changes the compiled bytes, so the hash moves; the favicon's
+    // does not.
+    write(&dir, "sass/_vars.scss", "$width: 51rem;");
+    build_ok(&dir);
+    let second = extract_probe(&read(&dir, "_site/en/blog/first/index.html"));
+    let again: Vec<&str> = second.split('|').collect();
+    assert_ne!(hash(again[0]).unwrap(), css, "{second}");
+    assert_eq!(again[1], parts[1]);
+}
+
+#[test]
+fn a_computed_path_is_busted_only_when_the_plan_knows_the_file() {
+    // favicon.svg named only through a variable: the plan cannot list it,
+    // so the URL stays plain rather than carrying a hash nothing tracks.
+    let out = probe(
+        "fn-get-url-bust-computed",
+        "{% set name = \"favicon\" %}{{ get_url(path=name ~ \".svg\") }}|{{ get_url(path=\"style\" ~ \".css\") }}",
+    );
+    let parts: Vec<&str> = out.split('|').collect();
+    assert_eq!(parts[0], "https://example.org/favicon.svg");
+    // base.html names style.css literally, so the page depends on it anyway.
+    assert!(
+        parts[1].starts_with("https://example.org/style.css?h="),
+        "{out}"
+    );
+    let error = probe_error(
+        "fn-get-url-bust-computed-explicit",
+        "{% set name = \"favicon\" %}{{ get_url(path=name ~ \".svg\", cachebust=true) }}",
+    );
+    assert!(error.contains("cannot be cache-busted here"), "{error}");
+    let error = probe_error(
+        "fn-get-url-bust-rendered",
+        "{{ get_url(path=\"sitemap.xml\", cachebust=true) }}",
+    );
+    assert!(
+        error.contains("\"sitemap.xml\" cannot be cache-busted"),
+        "{error}"
+    );
+}
+
+#[test]
+fn cachebust_false_in_the_configuration_turns_it_off() {
+    let dir = site("fn-get-url-bust-off");
+    prepend_config(&dir, "cachebust = false\n");
+    write_probe(
+        &dir,
+        "{{ get_url(path=\"style.css\") }}|{{ get_url(path=\"favicon.svg\", cachebust=true) }}",
+    );
+    build_ok(&dir);
+    let out = extract_probe(&read(&dir, "_site/en/blog/first/index.html"));
+    let parts: Vec<&str> = out.split('|').collect();
+    assert_eq!(parts[0], "https://example.org/style.css");
+    assert!(
+        parts[1].starts_with("https://example.org/favicon.svg?h="),
+        "a call can still ask: {out}"
+    );
+    let sources = sources_of(&plan_of(&dir), "_site/en/blog/first/index.html");
+    assert!(
+        !sources.iter().any(|s| s.starts_with("sass/")),
+        "{sources:?}"
     );
 }
 

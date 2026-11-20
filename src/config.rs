@@ -76,6 +76,12 @@ pub struct Config {
     pub images: Images,
     #[serde(default)]
     pub prune: Prune,
+    /// Whether `get_url` appends `?h=<hash of the file's bytes>` to the
+    /// static, published and Sass files it links, so a changed file gets a
+    /// new URL and an unchanged one keeps its cached copy. A call's own
+    /// `cachebust=` argument overrides it.
+    #[serde(default = "default_true")]
+    pub cachebust: bool,
     /// Retired URLs, each written as a redirect page to where its content
     /// lives now. For URLs that are not a page's own `aliases`: a section
     /// that moved, a file that is gone, an address from an older site.

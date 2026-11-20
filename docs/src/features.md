@@ -36,7 +36,7 @@ A working list of everything we want a static site generator to do. Scope is del
 - **Asset pipeline**:
     - Image optimization: resize, convert to WebP/AVIF, generate responsive `srcset`.
     - SVG minification.
-    - Fingerprinted filenames (`style.a1b2c3.css`) for cache-busting — manifest reflects the hashed names so downstream tools can consume them.
+    - Cache-busting by content: `get_url` appends `?h=<hash>` to static, published and Sass files (done, on by default; a query string rather than a fingerprinted file name, so output paths and the manifest stay stable).
     - Copy-through for arbitrary static files.
 - **JavaScript bundling** — out of scope; delegate to esbuild/rollup via rsconstruct. rssite just references the output.
 

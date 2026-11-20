@@ -564,25 +564,13 @@ impl Plan {
         let sass_sources: BTreeSet<String> =
             site.sass_files.iter().map(|f| site.rel(&f.path)).collect();
         for file in &site.sass_files {
-            let rel = file.rel.clone();
-            let path = &file.path;
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let is_partial = rel.split('/').any(|part| part.starts_with('_'));
-            let is_sass = name.ends_with(".scss") || name.ends_with(".sass");
-            if is_partial || !is_sass {
+            let Some(css) = crate::site::sass_output(&file.rel) else {
                 continue;
-            }
-            let css = format!(
-                "{}.css",
-                rel.rsplit_once('.').map(|(s, _)| s).unwrap_or(&rel)
-            );
+            };
             outputs.push(Output {
                 path: css,
                 sources: sass_sources.clone(),
-                kind: Kind::Sass(path.clone()),
+                kind: Kind::Sass(file.path.clone()),
             });
         }
         for asset in &site.assets {

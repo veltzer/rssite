@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tera::Tera;
 
 #[derive(Clone)]
@@ -31,6 +31,17 @@ pub struct Model {
     pub planned: BTreeSet<String>,
     pub language_codes: Vec<String>,
     pub markdown_options: crate::markdown::RenderOptions,
+    /// `cachebust` in the configuration: what `get_url` does without a
+    /// `cachebust=` argument.
+    pub cachebust: bool,
+    pub bustable: Arc<BTreeMap<String, crate::site::Bustable>>,
+    pub sass_load_paths: Vec<PathBuf>,
+    /// Each cache-busted file's hash, computed once: output path to hash.
+    hashes: Arc<Mutex<BTreeMap<String, String>>>,
+    /// The sources of the output being rendered, when it is one of the
+    /// plan's: `get_url` cache-busts only a file among them, since only
+    /// then does the plan rebuild the output when the file changes.
+    scope: Arc<Mutex<Option<BTreeSet<String>>>>,
 }
 
 fn light_page(page: &Page) -> Value {
@@ -400,7 +411,49 @@ impl Model {
             planned,
             language_codes,
             markdown_options: site.config.render_options(),
+            cachebust: site.config.cachebust,
+            bustable: Arc::new(site.bustable.clone()),
+            sass_load_paths: site.sass_load_paths(),
+            hashes: Arc::new(Mutex::new(BTreeMap::new())),
+            scope: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Set the sources of the output about to be rendered, or clear them.
+    pub fn set_scope(&self, sources: Option<BTreeSet<String>>) {
+        *self.scope.lock().expect("scope lock") = sources;
+    }
+
+    /// Whether the output being rendered lists every source of `bustable`.
+    fn in_scope(&self, bustable: &crate::site::Bustable) -> bool {
+        self.scope
+            .lock()
+            .expect("scope lock")
+            .as_ref()
+            .is_some_and(|sources| bustable.sources.is_subset(sources))
+    }
+
+    /// The content hash of the file the build writes at `path`.
+    fn hash_of(&self, path: &str, bustable: &crate::site::Bustable) -> anyhow::Result<String> {
+        if let Some(hash) = self.hashes.lock().expect("hash lock").get(path) {
+            return Ok(hash.clone());
+        }
+        let bytes = match &bustable.target {
+            crate::site::BustTarget::File(file) => {
+                std::fs::read(file).with_context(|| format!("reading {}", file.display()))?
+            }
+            crate::site::BustTarget::Sass(file) => {
+                crate::util::compile_sass(file, &self.sass_load_paths)
+                    .with_context(|| format!("compiling {}", file.display()))?
+                    .into_bytes()
+            }
+        };
+        let hash = crate::util::content_hash(&bytes);
+        self.hashes
+            .lock()
+            .expect("hash lock")
+            .insert(path.to_owned(), hash.clone());
+        Ok(hash)
     }
 
     /// `@/blog/post.md` (or with an explicit language suffix) to a permalink.
@@ -588,7 +641,31 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
                     "get_url: {path:?} is not a file this build produces; pass check=false for a file another tool writes"
                 )));
             }
-            Ok(Value::String(format!("{}/{relative}", model.base_url)))
+            let url = format!("{}/{relative}", model.base_url);
+            let explicit = args.contains_key("cachebust");
+            if !arg_bool(args, "cachebust", "get_url", model.cachebust)? {
+                return Ok(Value::String(url));
+            }
+            let Some(bustable) = model.bustable.get(relative) else {
+                if explicit {
+                    return Err(err(format!(
+                        "get_url: {path:?} cannot be cache-busted: only a static, published or Sass file has its bytes known before rendering"
+                    )));
+                }
+                return Ok(Value::String(url));
+            };
+            if !model.in_scope(bustable) {
+                if explicit {
+                    return Err(err(format!(
+                        "get_url: {path:?} cannot be cache-busted here: the plan does not list it as a source of this output; write the path as one literal string (a computed path is only known while rendering), and call it from a template rather than a content body or shortcode"
+                    )));
+                }
+                return Ok(Value::String(url));
+            }
+            let hash = model
+                .hash_of(relative, bustable)
+                .map_err(|e| err(format!("get_url: {e:#}")))?;
+            Ok(Value::String(format!("{url}?h={hash}")))
         });
     }
     {

@@ -28,6 +28,11 @@ themes_dir = "themes"
 # addressed the same way.
 fallback_language = "en"
 
+# get_url names the static, published and Sass files it links by a hash
+# of their bytes (style.css?h=1a2b...), so a changed file gets a new URL.
+# Default true; see Templates. A call's cachebust= argument overrides it.
+cachebust = true
+
 [[languages]]
 code = "en"
 name = "English"

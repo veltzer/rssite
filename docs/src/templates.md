@@ -70,7 +70,7 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 ## Functions
 
 - `trans(key, lang=?)`: a string from `i18n/<lang>.toml`. A missing key is an error naming the file.
-- `get_url(path, lang=?, check=true)`: `@/blog/post.md` gives that content's permalink in `lang`; any other path is a file of the build (`style.css`, `images/x.png`, `en/tags/`) and resolves against `base_url`. A path the build does not produce is an error; pass `check=false` for a file another tool writes into the output tree.
+- `get_url(path, lang=?, check=true, cachebust=?)`: `@/blog/post.md` gives that content's permalink in `lang`; any other path is a file of the build (`style.css`, `images/x.png`, `en/tags/`) and resolves against `base_url`. A path the build does not produce is an error; pass `check=false` for a file another tool writes into the output tree. A static, published or Sass file gets `?h=<hash of its bytes>` appended, see [Cache-busting](#cache-busting).
 - `get_page(path, lang=?)` and `get_section(path, lang=?)`: the page or section object for a content path such as `blog/post.md` or `blog/_index.md`.
 - `get_taxonomy(name, lang=?)`: `{name, lang, path, permalink, terms}`.
 - `get_taxonomy_url(name, term, lang=?)`: a term's permalink; an unknown term is an error.
@@ -78,6 +78,26 @@ next (URL or null), base_url, pages (this pager's slice), total_pages
 - `load_data(path, format=?, required=true)`: a TOML or JSON file under the site root as a value, any other file as a string. With `required=false` a missing file is `null`. The path is recorded as a source of the pages that use it.
 
 `now()`, `get_random()` and `get_env()` exist in Tera and are errors here: their results would differ between two builds of the same sources.
+
+## Cache-busting
+
+Hosts let browsers keep a stylesheet or a script for a while (GitHub Pages: ten minutes), so after a deploy a reader can get the new HTML with yesterday's `style.css`. Naming every asset by the commit fixes that but throws away every reader's cache on every deploy, changed file or not. rssite names a file by its content instead:
+
+```html
+<link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+<!-- https://example.org/style.css?h=9f2c4e0b7a1d3c55 -->
+```
+
+The hash is 64-bit FNV-1a of the bytes the build writes: the file itself for a static or `[[publish]]`ed file, the compiled CSS for a Sass entry point. It moves when those bytes do and only then, and it is the same on every machine and every release.
+
+It is on by default. `cachebust = false` in `rssite.toml` turns it off for the site; `cachebust=false` or `cachebust=true` on a call overrides that for the one URL.
+
+What gets a hash, and what does not:
+
+- **Static, published and Sass files.** Pages, feeds, the sitemap, the search index, content assets and image variants are left as they are: a rendered file's bytes are not known until it is rendered, and a feed reader or search engine wants a stable address. Asking for one with `cachebust=true` is an error.
+- **Literal paths in templates.** A URL whose hash changes with a file makes the page depend on that file, so the plan lists the file's sources (for a stylesheet, every Sass file) among the page's own, and a build system rebuilds the pages when the file changes. The plan can only see a path written as one string: `get_url(path='style.css')`, not `get_url(path='data/' ~ lang ~ '.json')`. A computed path, and any call inside a content body or a shortcode (whose HTML is reused in listings with other sources), is left without a hash unless the output already depends on that file; with `cachebust=true` it is an error instead, so a URL is never hashed by a file nothing tracks.
+
+A consequence to expect: editing the stylesheet rewrites every page that links it, because each one now names the new hash.
 
 ## Filters
 
