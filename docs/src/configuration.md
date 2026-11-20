@@ -63,6 +63,7 @@ anchors = "safe"
 smart_punctuation = false  # a page or section can override this
 highlight = true           # build-time syntax highlighting, CSS in highlight.css
 highlight_theme = "InspiredGitHub"
+highlight_css = true       # false: no highlight.css; the site styles the scope classes itself
 math = false               # $…$ and $$…$$ as math; a page or section can override this
 external_links_target_blank = false  # links leaving the site open in a new tab
 external_links_no_follow = false     # rel="nofollow" on them

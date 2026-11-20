@@ -531,7 +531,7 @@ impl Plan {
                 kind: Kind::Root,
             });
         }
-        if site.config.markdown.highlight {
+        if site.config.markdown.highlight && site.config.markdown.highlight_css {
             let mut sources = BTreeSet::new();
             sources.insert(config_file.clone());
             outputs.push(Output {

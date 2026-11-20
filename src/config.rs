@@ -228,6 +228,11 @@ pub struct Markdown {
     /// A syntect theme name; its CSS is written to `highlight.css`.
     #[serde(default = "default_highlight_theme")]
     pub highlight_theme: String,
+    /// Whether `highlight.css` is written. A site that colours the
+    /// highlighter's scope classes in its own stylesheet (to follow its
+    /// themes, say) sets this to false and gets the markup without the file.
+    #[serde(default = "default_true")]
+    pub highlight_css: bool,
     /// `$…$` and `$$…$$` as math; a page or section can override it.
     #[serde(default)]
     pub math: bool,
@@ -255,6 +260,7 @@ impl Default for Markdown {
             smart_punctuation: false,
             highlight: true,
             highlight_theme: default_highlight_theme(),
+            highlight_css: true,
             math: false,
             external_links_target_blank: false,
             external_links_no_follow: false,

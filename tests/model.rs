@@ -1214,6 +1214,21 @@ fn smart_punctuation_can_be_set_per_site_page_or_section() {
 }
 
 #[test]
+fn highlight_css_false_keeps_the_markup_and_writes_no_stylesheet() {
+    let dir = site("highlight-css");
+    write(
+        &dir,
+        "content/blog/code.en.md",
+        "+++\ntitle = \"c\"\ndate = 2026-01-01\n+++\n\n```rust\nfn x() {}\n```\n",
+    );
+    append_config(&dir, "[markdown]\nhighlight_css = false");
+    build_ok(&dir);
+    assert!(!planned_paths(&plan_of(&dir)).contains(&"_site/highlight.css".to_owned()));
+    assert!(!dir.join("_site/highlight.css").exists());
+    assert!(read(&dir, "_site/en/blog/code/index.html").contains("<pre class=\"highlight\">"));
+}
+
+#[test]
 fn highlighting_can_be_turned_off_and_needs_a_known_theme() {
     let dir = site("highlight");
     write(

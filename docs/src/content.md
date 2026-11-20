@@ -156,6 +156,8 @@ fn main() {}
 
 `linenos` numbers the lines (from `linenostart`, default 1), and `hl_lines` marks lines of the block, counted from 1 whatever `linenostart` says. Each line then becomes `<span class="line">`, with `hl` added on a marked line and `data-line="N"` when numbered; `highlight.css` styles them, and a site without highlighting styles the same classes itself. The numbers are drawn by CSS, so copying the code does not copy them. A malformed `hl_lines`, or one naming a line past the end of the block, is an error. Other options, such as mdBook's `ignore`, are left alone, and a block without options renders exactly as before.
 
+The colours come from `highlight.css`, one fixed palette (`[markdown] highlight_theme`). A site whose own stylesheet colours the scope classes (`.comment`, `.string`, `.keyword`, ...) sets `highlight_css = false`: the markup is the same and the file is not written. The rules for numbered and marked lines live in that file too, so such a site writes its own `pre code .line` rules if it uses `linenos` or `hl_lines`.
+
 Diagrams: a fenced block whose language is in `[markdown] diagram_languages` (`["mermaid"]` by default) is neither highlighted nor numbered. Its source, escaped, goes into `<pre class="mermaid">` for a script on the page (mermaid.js) to draw.
 
 On a page whose language has `direction = "rtl"`, code blocks get `<pre dir="ltr">` (a titled one, `<figure dir="ltr">`) and inline code gets `<code dir="ltr">`, so the bidi algorithm does not reorder punctuation and operators inside them. Nothing needs to be written for it.
