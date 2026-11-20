@@ -233,13 +233,33 @@ pub fn content_hash(bytes: &[u8]) -> String {
     format!("{hash:016x}")
 }
 
-/// Compile a Sass entry point, finding `@use`d files along `load_paths`.
-pub fn compile_sass(path: &Path, load_paths: &[PathBuf]) -> Result<String> {
-    let mut options = grass::Options::default();
+/// Compile a Sass entry point, finding `@use`d files along `load_paths`;
+/// `compressed` is grass's minified output style (`[minify] css`).
+pub fn compile_sass(path: &Path, load_paths: &[PathBuf], compressed: bool) -> Result<String> {
+    let style = if compressed {
+        grass::OutputStyle::Compressed
+    } else {
+        grass::OutputStyle::Expanded
+    };
+    let mut options = grass::Options::default().style(style);
     for dir in load_paths {
         options = options.load_path(dir);
     }
     grass::from_path(path, &options).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// Minified HTML: whitespace collapsed where it does not show, comments
+/// and redundant attribute quotes dropped. Closing tags and the `<html>`
+/// and `<head>` tags are kept, so the result still reads as the document
+/// it was to a validator and to a person with view-source. `<pre>`,
+/// `<textarea>`, `<script>` and `<style>` content is left as it is.
+pub fn minify_html(html: &[u8]) -> Vec<u8> {
+    let cfg = simple_minify_html::Cfg {
+        keep_closing_tags: true,
+        keep_html_and_head_opening_tags: true,
+        ..simple_minify_html::Cfg::default()
+    };
+    simple_minify_html::minify(html, Some(cfg))
 }
 
 pub fn emit(text: &str) -> Result<()> {

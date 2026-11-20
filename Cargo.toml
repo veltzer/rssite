@@ -26,6 +26,10 @@ pulldown-cmark-escape = "0.11"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# HTML minification (`[minify] html`). The fork of minify-html without its
+# CSS and JS engines: those bring lightningcss, whose source maps pull in
+# rkyv 0.7 (RUSTSEC-2026-0235). Stylesheets are minified by grass instead.
+simple-minify-html = "0.17"
 # Pure-Rust regex engine (no oniguruma C build); the bundled syntax and theme
 # sets are what the fenced code blocks are highlighted with. Features are
 # listed one by one rather than through default-fancy, which would also pull

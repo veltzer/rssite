@@ -311,12 +311,24 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
         if matches!(output.kind, Kind::Image(_)) {
             continue;
         }
-        let bytes = renderer
+        let mut bytes = renderer
             .render(output)
             .with_context(|| format!("producing {}", output.path))?;
+        if site.config.minify.html && is_rendered_html(output) {
+            bytes = crate::util::minify_html(&bytes);
+        }
         files.insert(output.path.clone(), bytes);
     }
     Ok(files)
+}
+
+/// An HTML file rssite renders, as opposed to one it publishes as it is.
+fn is_rendered_html(output: &Output) -> bool {
+    output.path.ends_with(".html")
+        && !matches!(
+            output.kind,
+            Kind::Static(_) | Kind::Asset(_) | Kind::Image(_) | Kind::Sass(_)
+        )
 }
 
 pub fn run(root: &Path, drafts: bool, options: &Options) -> Result<Report> {
@@ -720,9 +732,13 @@ impl Renderer<'_> {
             Kind::Sass(path) => {
                 // The site's sass directory first, then the theme's, so an
                 // `@use "x"` finds the site's override before the theme's.
-                crate::util::compile_sass(path, &self.site.sass_load_paths())
-                    .with_context(|| format!("compiling {}", self.site.rel(path)))?
-                    .into_bytes()
+                crate::util::compile_sass(
+                    path,
+                    &self.site.sass_load_paths(),
+                    self.site.config.minify.css,
+                )
+                .with_context(|| format!("compiling {}", self.site.rel(path)))?
+                .into_bytes()
             }
             Kind::Image(path) => crate::images::encode(&self.site.images[path])?,
             Kind::Alias { target } => crate::builtin::redirect(target).into_bytes(),

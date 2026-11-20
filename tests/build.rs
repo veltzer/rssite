@@ -1447,3 +1447,58 @@ fn a_keep_glob_must_be_relative_to_the_output_directory() {
         "[prune] keep = \"/data/**\" must be a path relative to the output directory",
     );
 }
+
+#[test]
+fn minify_shrinks_rendered_html_and_compiled_css_only() {
+    let dir = site("minify");
+    write(
+        &dir,
+        "static/verbatim.html",
+        "<p>\n\n   kept   as   it   is\n</p>\n",
+    );
+    build_ok(&dir);
+    let page = read(&dir, "_site/en/blog/first/index.html");
+    let css = read(&dir, "_site/style.css");
+    append_config(&dir, "[minify]\nhtml = true\ncss = true\n");
+    build_ok(&dir);
+    let small_page = read(&dir, "_site/en/blog/first/index.html");
+    let small_css = read(&dir, "_site/style.css");
+    assert!(small_page.len() < page.len(), "{small_page}");
+    assert!(small_css.len() < css.len(), "{small_css}");
+    assert!(
+        !small_css.contains('\n'),
+        "compressed CSS is one line: {small_css}"
+    );
+    // Closing tags and <head> stay: the page still validates as written.
+    assert!(small_page.contains("</body>"), "{small_page}");
+    assert!(small_page.contains("<head>"), "{small_page}");
+    assert!(small_page.contains("First post"), "{small_page}");
+    // A static file is published as it is.
+    assert_eq!(
+        read(&dir, "_site/verbatim.html"),
+        "<p>\n\n   kept   as   it   is\n</p>\n"
+    );
+    // Feeds and the sitemap are XML and are left alone.
+    assert!(read(&dir, "_site/sitemap.xml").contains('\n'));
+    // The stylesheet's hash names the compressed bytes the build writes.
+    assert!(small_page.contains("style.css?h="), "{small_page}");
+}
+
+#[test]
+fn minified_html_keeps_preformatted_text() {
+    let dir = site("minify-pre");
+    append_config(&dir, "[minify]\nhtml = true\n");
+    write(
+        &dir,
+        "content/blog/code.en.md",
+        "+++\ntitle = \"Code\"\ndate = 2026-01-05\n+++\n```text\na   b\n    c\n```\n",
+    );
+    write(
+        &dir,
+        "content/blog/code.he.md",
+        "+++\ntitle = \"קוד\"\ndate = 2026-01-05\n+++\nטקסט\n",
+    );
+    build_ok(&dir);
+    let page = read(&dir, "_site/en/blog/code/index.html");
+    assert!(page.contains("a   b\n    c"), "{page}");
+}

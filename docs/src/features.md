@@ -32,7 +32,7 @@ A working list of everything we want a static site generator to do. Scope is del
 - **SCSS/SASS** compilation via `grass` (or `rsass`):
     - Partials (`_vars.scss`) tracked as sources in the manifest.
     - Source maps in dev mode.
-- **CSS** passthrough with optional minification.
+- **CSS** passthrough; compiled Sass optionally compressed (`[minify] css`, done). HTML optionally minified (`[minify] html`, done).
 - **Asset pipeline**:
     - Image optimization: resize, convert to WebP/AVIF, generate responsive `srcset`.
     - SVG minification.

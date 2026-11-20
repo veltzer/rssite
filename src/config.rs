@@ -76,6 +76,8 @@ pub struct Config {
     pub images: Images,
     #[serde(default)]
     pub prune: Prune,
+    #[serde(default)]
+    pub minify: Minify,
     /// Whether `get_url` appends `?h=<hash of the file's bytes>` to the
     /// static, published and Sass files it links, so a changed file gets a
     /// new URL and an unchanged one keeps its cached copy. A call's own
@@ -90,6 +92,19 @@ pub struct Config {
     /// Free-form values exposed to templates as `config.extra`.
     #[serde(default)]
     pub extra: toml::Table,
+}
+
+/// `[minify]`: smaller output, off by default. `html` minifies every HTML
+/// file rssite renders (pages, listings, the 404, redirects; never a static
+/// file, which is published as it is); `css` compiles Sass to compressed
+/// CSS.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Minify {
+    #[serde(default)]
+    pub html: bool,
+    #[serde(default)]
+    pub css: bool,
 }
 
 /// `[prune]`: the output directory as rssite's own. Off, a build removes

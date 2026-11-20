@@ -26,20 +26,20 @@ matter to everything below it, shortcodes (templates called from
 markdown), and image processing (`[images]`: smaller widths, WebP and AVIF,
 `srcset`, `width` and `height`, lazy loading). The [demo site](demos/) shows each of them.
 Cache-busting asset URLs (`style.css?h=<hash>`, on by default) are documented
-in [Templates](docs/src/templates.md#cache-busting).
+in [Templates](docs/src/templates.md#cache-busting), and minification of HTML
+and compiled CSS (`[minify]`, off by default) in
+[Configuration](docs/src/configuration.md#minification).
 
 ## Bigger features
 
-1. **Minification** of HTML, CSS and inline JS: `minify_html` in zola,
-   `--minify` in Hugo. On a site of about 1,200 pages it saves real bytes.
-2. **Scheduled posts**: a future-dated post stays out unless `--future` is
+1. **Scheduled posts**: a future-dated post stays out unless `--future` is
    given, as in Hugo and Jekyll. To keep builds reproducible the cutoff has to
    be a plan input, for example `SOURCE_DATE_EPOCH`, which `src/build_info.rs`
    already reads.
-3. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
+2. **`rssite new <section>/<slug>`**: scaffold a post, like `hugo new`. On a
    bilingual site it writes both `.en.md` and `.he.md` with matching front
    matter.
-4. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
+3. **Base URL override**: `--base-url` (zola) or environments (Hugo), for
    preview deploys and local builds that should not point at the production
    host.
 
@@ -83,6 +83,6 @@ look were done.
 
 ## Where to start
 
-Minification is the next gap against zola and Hugo. Processing images in templates (zola's `resize_image`) waits on a
+Processing images in templates (zola's `resize_image`) waits on a
 way to put a template's images in the plan before rendering; markdown images
 are processed. Privacy-friendly embeds can now be written as shortcodes.

@@ -36,6 +36,8 @@ pub struct Model {
     pub cachebust: bool,
     pub bustable: Arc<BTreeMap<String, crate::site::Bustable>>,
     pub sass_load_paths: Vec<PathBuf>,
+    /// `[minify] css`: a stylesheet's hash is over the bytes the build writes.
+    pub minify_css: bool,
     /// Each cache-busted file's hash, computed once: output path to hash.
     hashes: Arc<Mutex<BTreeMap<String, String>>>,
     /// The sources of the output being rendered, when it is one of the
@@ -414,6 +416,7 @@ impl Model {
             cachebust: site.config.cachebust,
             bustable: Arc::new(site.bustable.clone()),
             sass_load_paths: site.sass_load_paths(),
+            minify_css: site.config.minify.css,
             hashes: Arc::new(Mutex::new(BTreeMap::new())),
             scope: Arc::new(Mutex::new(None)),
         }
@@ -443,7 +446,7 @@ impl Model {
                 std::fs::read(file).with_context(|| format!("reading {}", file.display()))?
             }
             crate::site::BustTarget::Sass(file) => {
-                crate::util::compile_sass(file, &self.sass_load_paths)
+                crate::util::compile_sass(file, &self.sass_load_paths, self.minify_css)
                     .with_context(|| format!("compiling {}", file.display()))?
                     .into_bytes()
             }

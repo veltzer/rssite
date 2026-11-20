@@ -85,6 +85,10 @@ quality = 80               # 1-100, for JPEG, WebP and AVIF
 sizes = "100vw"            # the sizes attribute: how wide the image is shown
 lazy = true                # loading="lazy"
 
+[minify]
+html = false               # minify every HTML file rssite renders (never a static file)
+css = false                # compile Sass to compressed CSS
+
 [prune]
 enabled = false            # a build removes every file in output_dir it did not plan
 keep = []                  # globs under output_dir for what other tools write there
@@ -121,6 +125,15 @@ from = "shared/shared-themes"      # relative to the site root
 to = "shared-themes"               # relative to the output root
 files = ["themes.css", "fonts.css", "theme-switcher.js", "fonts/*"]
 ```
+
+## Minification
+
+`[minify]` makes the output smaller; both switches are off by default.
+
+- `html = true` minifies every HTML file rssite renders: pages, listings, taxonomy pages, the 404 and the redirect pages. Whitespace that does not show is collapsed, comments go, and attribute quotes that are not needed are dropped. Closing tags and the `<html>` and `<head>` tags are kept, so the result still reads as the document it was to an HTML validator and in view-source. The content of `<pre>`, `<textarea>`, `<script>` and `<style>` is left as it is, so code blocks keep their layout and inline scripts and styles are not touched. Static files, including a static `.html`, are published as they are, and the feeds and the sitemap (XML) are not minified.
+- `css = true` compiles Sass in grass's compressed style. Static `.css` files are published as they are. With cache-busting on, a stylesheet's `?h=` hash is over the compressed bytes the build writes.
+
+Inline JavaScript and CSS are not minified: the minifiers that would do it (lightningcss, oxc) bring dependencies with open security advisories, and on a site whose pages are mostly text the gain after gzip is small. Measured on veltzer.org (about 2,100 HTML files): HTML 5% smaller raw and 3% smaller gzipped, the stylesheet 16% smaller gzipped.
 
 ## Themes
 
