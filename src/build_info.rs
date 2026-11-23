@@ -18,13 +18,13 @@ pub struct BuildInfo {
 }
 
 impl BuildInfo {
-    pub fn now() -> BuildInfo {
+    pub fn now() -> Self {
         let epoch = std::env::var("SOURCE_DATE_EPOCH").ok();
-        BuildInfo::at(from_epoch(epoch.as_deref()).unwrap_or_else(Utc::now))
+        Self::at(from_epoch(epoch.as_deref()).unwrap_or_else(Utc::now))
     }
 
-    fn at(moment: DateTime<Utc>) -> BuildInfo {
-        BuildInfo {
+    fn at(moment: DateTime<Utc>) -> Self {
+        Self {
             date: moment.format("%Y-%m-%d").to_string(),
             time: moment.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             year: chrono::Datelike::year(&moment),

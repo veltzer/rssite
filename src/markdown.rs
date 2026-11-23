@@ -74,7 +74,7 @@ pub struct Heading {
     pub level: u8,
     pub id: String,
     pub title: String,
-    pub children: Vec<Heading>,
+    pub children: Vec<Self>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -144,7 +144,7 @@ pub struct ExternalLinks {
 }
 
 impl ExternalLinks {
-    fn any(self) -> bool {
+    const fn any(self) -> bool {
         self.target_blank || self.no_follow || self.no_referrer
     }
 }
@@ -223,16 +223,15 @@ struct Fence {
 }
 
 impl Fence {
-    fn parse(info: &str) -> Result<Fence> {
+    fn parse(info: &str) -> Result<Self> {
         let info = info.trim();
-        let (lang, rest) = match info.find([' ', '\t', ',']) {
-            Some(at) => (&info[..at], &info[at + 1..]),
-            None => (info, ""),
-        };
-        let mut fence = Fence {
+        let (lang, rest) = info
+            .find([' ', '\t', ','])
+            .map_or((info, ""), |at| (&info[..at], &info[at + 1..]));
+        let mut fence = Self {
             lang: lang.to_owned(),
             linenostart: 1,
-            ..Fence::default()
+            ..Self::default()
         };
         for option in rest.split(',').map(str::trim) {
             if option == "linenos" {
@@ -632,16 +631,13 @@ impl<'e> EventState<'_, 'e> {
 
     fn text(&mut self, text: CowStr<'e>) {
         self.word_count += text.split_whitespace().count();
-        let text = match self
+        let text = self
             .options
             .extensions
             .emoji
             .then(|| replace_emoji(&text))
             .flatten()
-        {
-            Some(replaced) => CowStr::from(replaced),
-            None => text,
-        };
+            .map_or(text, CowStr::from);
         if let Some((_, _, buffer, _)) = self.heading.as_mut() {
             buffer.push_str(&text);
         }
@@ -790,10 +786,8 @@ fn replace_emoji(text: &str) -> Option<String> {
         return None;
     }
     let replaced = re.replace_all(text, |c: &regex::Captures| {
-        match emojis::get_by_shortcode(&c[1]) {
-            Some(emoji) => emoji.as_str().to_owned(),
-            None => c[0].to_owned(),
-        }
+        emojis::get_by_shortcode(&c[1])
+            .map_or_else(|| c[0].to_owned(), |emoji| emoji.as_str().to_owned())
     });
     Some(replaced.into_owned())
 }
@@ -1032,7 +1026,7 @@ mod tests {
     #[test]
     fn a_shortcode_where_html_cannot_go_is_an_error() {
         let with = RenderOptions {
-            shortcodes: Some(["u".to_owned()].into_iter().collect()),
+            shortcodes: Some(std::iter::once("u".to_owned()).collect()),
             ..opts()
         };
         let fine = render("see {{ u() }} here\n", &with, &no_links).unwrap();

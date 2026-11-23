@@ -198,10 +198,10 @@ pub enum Direction {
 }
 
 impl Direction {
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Direction::Ltr => "ltr",
-            Direction::Rtl => "rtl",
+            Self::Ltr => "ltr",
+            Self::Rtl => "rtl",
         }
     }
 }
@@ -289,7 +289,7 @@ struct MarkdownFile {
 
 impl From<MarkdownFile> for Markdown {
     fn from(file: MarkdownFile) -> Self {
-        Markdown {
+        Self {
             highlight: Highlighting {
                 enabled: file.highlight.unwrap_or(true),
                 theme: file.highlight_theme.unwrap_or_else(default_highlight_theme),
@@ -315,7 +315,7 @@ impl From<MarkdownFile> for Markdown {
 
 impl From<Markdown> for MarkdownFile {
     fn from(markdown: Markdown) -> Self {
-        MarkdownFile {
+        Self {
             smart_punctuation: Some(markdown.extensions.smart_punctuation),
             highlight: Some(markdown.highlight.enabled),
             highlight_theme: Some(markdown.highlight.theme),
@@ -375,7 +375,7 @@ pub struct Feeds {
 
 impl Default for Feeds {
     fn default() -> Self {
-        Feeds {
+        Self {
             limit: default_feed_limit(),
             filename: default_feed_filename(),
             root: false,
@@ -399,7 +399,7 @@ pub struct Search {
 
 impl Default for Search {
     fn default() -> Self {
-        Search {
+        Self {
             enabled: false,
             filename: default_search_filename(),
             content: false,
@@ -440,7 +440,7 @@ pub struct Images {
 
 impl Default for Images {
     fn default() -> Self {
-        Images {
+        Self {
             enabled: false,
             widths: default_image_widths(),
             formats: default_image_formats(),
@@ -459,7 +459,7 @@ fn default_image_formats() -> Vec<String> {
     vec!["webp".to_owned()]
 }
 
-fn default_image_quality() -> u8 {
+const fn default_image_quality() -> u8 {
     80
 }
 
@@ -481,7 +481,7 @@ pub struct Related {
 
 impl Default for Related {
     fn default() -> Self {
-        Related {
+        Self {
             limit: default_related_limit(),
             taxonomies: Vec::new(),
         }
@@ -502,7 +502,7 @@ pub struct Sitemap {
 
 impl Default for Sitemap {
     fn default() -> Self {
-        Sitemap {
+        Self {
             enabled: true,
             pagers: true,
         }
@@ -543,7 +543,7 @@ fn default_diagram_languages() -> Vec<String> {
 fn default_highlight_theme() -> String {
     "InspiredGitHub".into()
 }
-fn default_feed_limit() -> usize {
+const fn default_feed_limit() -> usize {
     20
 }
 fn default_feed_filename() -> String {
@@ -552,19 +552,19 @@ fn default_feed_filename() -> String {
 fn default_search_filename() -> String {
     "search.json".into()
 }
-fn default_related_limit() -> usize {
+const fn default_related_limit() -> usize {
     5
 }
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
 impl Config {
     /// Read and validate `<root>/rssite.toml`.
-    pub fn load(root: &Path) -> Result<Config> {
+    pub fn load(root: &Path) -> Result<Self> {
         let path = root.join(CONFIG_FILE);
         let text = crate::util::read(&path)?;
-        let mut config: Config =
+        let mut config: Self =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         config.validate()?;
         Ok(config)

@@ -24,7 +24,7 @@ use std::ops::Range;
 pub const DIR: &str = "shortcodes/";
 
 /// A shortcode call found in a body.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Call {
     pub name: String,
     /// The arguments, as the template sees them.
@@ -192,7 +192,7 @@ fn parse_call(text: &str, at: usize, first_line: usize) -> Result<Option<Parsed>
     };
     let body = text[p..body_end]
         .strip_prefix('\n')
-        .unwrap_or(&text[p..body_end]);
+        .unwrap_or_else(|| &text[p..body_end]);
     let body = body.strip_suffix('\n').unwrap_or(body);
     Ok(Some(Parsed {
         name,

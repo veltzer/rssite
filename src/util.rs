@@ -140,16 +140,14 @@ pub fn html_to_text(html: &str) -> String {
         } else {
             None
         };
-        rest = match skip_to {
-            Some(end) => match tag.to_ascii_lowercase().find(end) {
-                Some(e) => &tag[e + end.len()..],
-                None => "",
+        rest = skip_to.map_or_else(
+            || tag.find('>').map_or("", |e| &tag[e + 1..]),
+            |end| {
+                tag.to_ascii_lowercase()
+                    .find(end)
+                    .map_or("", |e| &tag[e + end.len()..])
             },
-            None => match tag.find('>') {
-                Some(e) => &tag[e + 1..],
-                None => "",
-            },
-        };
+        );
     }
     out.push_str(rest);
     let decoded = out
@@ -286,7 +284,7 @@ mod text_tests {
     fn html_becomes_its_text() {
         assert_eq!(html_to_text("<p>a <b>b</b></p>\n<p>c&amp;d</p>"), "a b c&d");
         assert_eq!(
-            html_to_text("<style>p{x:1}</style>x<script>y()</script>z"),
+            html_to_text("<style>p { color: red }</style>x<script>y()</script>z"),
             "x z"
         );
         assert_eq!(html_to_text("a<!-- more -->b"), "a b");

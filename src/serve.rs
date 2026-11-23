@@ -31,8 +31,8 @@ struct Served {
 }
 
 impl Served {
-    fn of(root: &Path, config: &Config) -> Served {
-        Served {
+    fn of(root: &Path, config: &Config) -> Self {
+        Self {
             dir: root.join(&config.output_dir),
             base_url: config.base_url.clone(),
         }
@@ -67,7 +67,6 @@ pub fn serve(root: &Path, drafts: bool, port: u16, watch: Watch, rewrite: bool) 
         initial_output_dir.display()
     );
     if watch != Watch::Off {
-        let root = root.clone();
         let served = Arc::clone(&served);
         let generation = Arc::clone(&generation);
         std::thread::spawn(move || {
@@ -174,10 +173,10 @@ fn local_origin(host: Option<&str>, port: u16) -> String {
             && h.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b".-:[]".contains(&b))
     };
-    match host.map(str::trim).filter(plain) {
-        Some(host) => format!("http://{host}"),
-        None => format!("http://127.0.0.1:{port}"),
-    }
+    host.map(str::trim).filter(plain).map_or_else(
+        || format!("http://127.0.0.1:{port}"),
+        |host| format!("http://{host}"),
+    )
 }
 
 /// `body` with every `base_url` replaced by `origin`. A match must end where
@@ -714,7 +713,7 @@ mod tests {
         let config = dir.join("rssite.toml");
         std::fs::write(&config, "a").unwrap();
         let watched = vec![dir.join("content"), dir.join("nope")];
-        let files = vec![config.clone()];
+        let files = vec![config];
         let first = fingerprint(&watched, &files);
         assert_eq!(first.len(), 1, "the config file alone");
         std::fs::write(dir.join("content/x.md"), "x").unwrap();

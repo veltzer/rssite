@@ -93,7 +93,7 @@ impl Plan {
         self.outputs.iter().map(|o| o.path.clone()).collect()
     }
 
-    pub fn compute(site: &Site) -> Result<Plan> {
+    pub fn compute(site: &Site) -> Result<Self> {
         let mut planner = Planner {
             site,
             outputs: Vec::new(),
@@ -109,7 +109,7 @@ impl Plan {
         planner.plan_static_files();
         planner.plan_images();
         planner.check(&local_targets)?;
-        Ok(Plan {
+        Ok(Self {
             outputs: planner.outputs,
         })
     }
@@ -721,8 +721,11 @@ impl Planner<'_> {
     ) -> Result<()> {
         let site = self.site;
         let rel = section.rel().unwrap_or("(root)");
-        if !pattern.contains("{n}") {
-            bail!("section {rel}: pager_aliases = {pattern:?} has no {{n}}");
+        // The pager-number placeholder, `{n}`, spelled through format! so it
+        // is not a bare string literal that looks like a format argument.
+        let placeholder = format!("{{{}}}", 'n');
+        if !pattern.contains(&placeholder) {
+            bail!("section {rel}: pager_aliases = {pattern:?} has no {placeholder}");
         }
         let Some(pagers) = pagers else {
             bail!("section {rel}: pager_aliases needs paginate_by");
@@ -741,7 +744,7 @@ impl Planner<'_> {
                 format!("{}{}/{n}/", section.permalink, section.front.paginate_path)
             };
             self.outputs.push(Output {
-                path: alias_path(&pattern.replace("{n}", &n.to_string())),
+                path: alias_path(&pattern.replace(&placeholder, &n.to_string())),
                 sources: alias_sources.clone(),
                 kind: Kind::Alias { target },
             });

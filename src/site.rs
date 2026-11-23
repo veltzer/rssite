@@ -88,7 +88,7 @@ impl Section {
         })
     }
 
-    pub fn is_root(&self) -> bool {
+    pub const fn is_root(&self) -> bool {
         self.components.is_empty()
     }
 
@@ -283,8 +283,8 @@ pub fn busted_url_paths(text: &str, default: bool) -> Vec<String> {
         if let Some(p) = path.captures(args) {
             let literal = p
                 .get(1)
-                .or(p.get(2))
-                .or(p.get(3))
+                .or_else(|| p.get(2))
+                .or_else(|| p.get(3))
                 .map_or("", |m| m.as_str());
             if !literal.starts_with("@/") && !literal.is_empty() {
                 out.push(literal.trim_start_matches('/').to_owned());
@@ -391,7 +391,7 @@ pub struct Site {
 
 /// A content path with the language suffix removed: `blog/post.en.md` ->
 /// `blog/post.md`.
-pub(crate) fn strip_lang(rel: &str, lang: &str) -> String {
+pub fn strip_lang(rel: &str, lang: &str) -> String {
     let Some((before_ext, ext)) = rel.rsplit_once('.') else {
         return rel.to_owned();
     };
@@ -421,7 +421,7 @@ fn no_section_message(file: &ContentFile) -> String {
 type CollectedTerms = BTreeMap<(String, String), BTreeMap<String, Vec<usize>>>;
 
 /// Union-find: the root of `x`, flattening the path on the way.
-fn find(parent: &mut [usize], mut x: usize) -> usize {
+const fn find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
         parent[x] = parent[parent[x]];
         x = parent[x];
@@ -430,7 +430,7 @@ fn find(parent: &mut [usize], mut x: usize) -> usize {
 }
 
 impl Site {
-    pub fn load(root: &Path, drafts: bool) -> Result<Site> {
+    pub fn load(root: &Path, drafts: bool) -> Result<Self> {
         let root = root
             .canonicalize()
             .with_context(|| format!("site root {}", root.display()))?;
@@ -481,7 +481,7 @@ impl Site {
         let content_dir = root.join(&config.content_dir);
         let (files, assets) = content::scan(&content_dir, &codes)?;
 
-        let mut site = Site {
+        let mut site = Self {
             root: root.clone(),
             config,
             drafts,

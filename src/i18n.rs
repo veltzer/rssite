@@ -24,7 +24,7 @@ pub struct DateNames {
 }
 
 impl DateNames {
-    pub fn english() -> DateNames {
+    pub fn english() -> Self {
         let months = [
             "January",
             "February",
@@ -48,7 +48,7 @@ impl DateNames {
             "Friday",
             "Saturday",
         ];
-        DateNames {
+        Self {
             months: months.iter().map(|s| (*s).to_owned()).collect(),
             months_short: months.iter().map(|s| s[..3].to_owned()).collect(),
             weekdays: weekdays.iter().map(|s| (*s).to_owned()).collect(),
@@ -102,8 +102,8 @@ impl Translations {
     /// site's last). A missing file contributes nothing; no file at all is
     /// an empty table with English date names, so a single-language site
     /// needs no i18n directory.
-    pub fn load_layered(dirs: &[PathBuf], code: &str) -> Result<Translations> {
-        let mut merged = Translations {
+    pub fn load_layered(dirs: &[PathBuf], code: &str) -> Result<Self> {
+        let mut merged = Self {
             code: code.to_owned(),
             paths: Vec::new(),
             strings: BTreeMap::new(),
@@ -127,10 +127,10 @@ impl Translations {
 
     /// Load `<dir>/<code>.toml`. A missing file is an empty table with
     /// English date names, so a single-language site needs no i18n directory.
-    pub fn load(dir: &Path, code: &str) -> Result<Translations> {
+    pub fn load(dir: &Path, code: &str) -> Result<Self> {
         let path = dir.join(format!("{code}.toml"));
         if !path.is_file() {
-            return Ok(Translations {
+            return Ok(Self {
                 code: code.to_owned(),
                 paths: Vec::new(),
                 strings: BTreeMap::new(),
@@ -191,7 +191,7 @@ impl Translations {
                 ),
             }
         }
-        Ok(Translations {
+        Ok(Self {
             code: code.to_owned(),
             paths: vec![path],
             strings,
@@ -206,10 +206,10 @@ impl Translations {
         if let Some(s) = self.strings.get(key) {
             Ok(s)
         } else {
-            let file = match self.paths.last() {
-                Some(p) => p.display().to_string(),
-                None => format!("i18n/{}.toml (no such file)", self.code),
-            };
+            let file = self.paths.last().map_or_else(
+                || format!("i18n/{}.toml (no such file)", self.code),
+                |p| p.display().to_string(),
+            );
             bail!(
                 "translation key {key:?} is missing for language {:?} in {file}",
                 self.code
@@ -226,16 +226,16 @@ pub struct DateValue {
 
 impl DateValue {
     /// Parse `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS`, or RFC 3339 with offset.
-    pub fn parse(text: &str) -> Result<DateValue> {
+    pub fn parse(text: &str) -> Result<Self> {
         let text = text.trim();
         if let Ok(date) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
             let naive = date.and_hms_opt(0, 0, 0).expect("midnight exists");
-            return Ok(DateValue {
+            return Ok(Self {
                 datetime: Utc.from_utc_datetime(&naive).fixed_offset(),
             });
         }
         if let Ok(datetime) = DateTime::parse_from_rfc3339(text) {
-            return Ok(DateValue { datetime });
+            return Ok(Self { datetime });
         }
         for format in [
             "%Y-%m-%dT%H:%M:%S",
@@ -243,7 +243,7 @@ impl DateValue {
             "%Y-%m-%dT%H:%M:%S%.f",
         ] {
             if let Ok(naive) = NaiveDateTime::parse_from_str(text, format) {
-                return Ok(DateValue {
+                return Ok(Self {
                     datetime: Utc.from_utc_datetime(&naive).fixed_offset(),
                 });
             }

@@ -217,10 +217,7 @@ fn render_tera_pages(
         let summary = crate::markdown::summary_of(&html);
         let words = html.split_whitespace().count();
         model.pages[i]["content"] = Value::String(html);
-        model.pages[i]["summary"] = match summary {
-            Some(s) => Value::String(s),
-            None => Value::Null,
-        };
+        model.pages[i]["summary"] = summary.map_or(Value::Null, Value::String);
         model.pages[i]["word_count"] = json!(words);
         model.pages[i]["reading_time"] = json!(words.div_ceil(200).max(1));
         // The body only exists now, so the description derived from
@@ -229,7 +226,7 @@ fn render_tera_pages(
             let text = crate::util::html_to_text(
                 model.pages[i]["summary"]
                     .as_str()
-                    .or(model.pages[i]["content"].as_str())
+                    .or_else(|| model.pages[i]["content"].as_str())
                     .unwrap_or_default(),
             );
             if !text.is_empty() {
@@ -273,10 +270,7 @@ fn render_tera_sections(
         let summary = crate::markdown::summary_of(&html);
         let words = html.split_whitespace().count();
         model.sections[s]["content"] = Value::String(html);
-        model.sections[s]["summary"] = match summary {
-            Some(s) => Value::String(s),
-            None => Value::Null,
-        };
+        model.sections[s]["summary"] = summary.map_or(Value::Null, Value::String);
         model.sections[s]["word_count"] = json!(words);
     }
     Ok(())

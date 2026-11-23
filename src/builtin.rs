@@ -101,8 +101,7 @@ mod tests {
             ("404.html", NOT_FOUND),
         ])
         .unwrap();
-        let names: Vec<&str> = tera.get_template_names().collect();
-        assert_eq!(names.len(), 3);
+        assert_eq!(tera.get_template_names().count(), 3);
     }
 
     #[test]

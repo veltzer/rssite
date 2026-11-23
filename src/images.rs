@@ -37,24 +37,24 @@ pub enum Format {
 }
 
 impl Format {
-    fn from_extension(ext: &str) -> Option<Format> {
+    fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_ascii_lowercase().as_str() {
-            "jpg" | "jpeg" => Some(Format::Jpeg),
-            "png" => Some(Format::Png),
-            "webp" => Some(Format::Webp),
-            "avif" => Some(Format::Avif),
-            "gif" => Some(Format::Gif),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            "png" => Some(Self::Png),
+            "webp" => Some(Self::Webp),
+            "avif" => Some(Self::Avif),
+            "gif" => Some(Self::Gif),
             _ => None,
         }
     }
 
-    fn mime(self) -> &'static str {
+    const fn mime(self) -> &'static str {
         match self {
-            Format::Jpeg => "image/jpeg",
-            Format::Png => "image/png",
-            Format::Webp => "image/webp",
-            Format::Avif => "image/avif",
-            Format::Gif => "image/gif",
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::Webp => "image/webp",
+            Self::Avif => "image/avif",
+            Self::Gif => "image/gif",
         }
     }
 }
@@ -133,7 +133,7 @@ pub fn info(path: &Path) -> Result<Info> {
     })
 }
 
-fn turns_sideways(orientation: Orientation) -> bool {
+const fn turns_sideways(orientation: Orientation) -> bool {
     matches!(
         orientation,
         Orientation::Rotate90
@@ -295,7 +295,10 @@ pub fn picture(
     if full {
         own.push((dest.to_owned(), info.width));
     }
-    let (src, src_width) = own.last().cloned().unwrap_or((dest.to_owned(), info.width));
+    let (src, src_width) = own
+        .last()
+        .cloned()
+        .unwrap_or_else(|| (dest.to_owned(), info.width));
 
     let html = picture_html(
         config,
@@ -311,10 +314,8 @@ pub fn picture(
 /// `a/b/c.jpg` -> (`a/b/`, `c.jpg`); a path without `/` has an empty
 /// directory.
 fn split_last(path: &str) -> (&str, &str) {
-    match path.rfind('/') {
-        Some(at) => (&path[..=at], &path[at + 1..]),
-        None => ("", path),
-    }
+    path.rfind('/')
+        .map_or(("", path), |at| (&path[..=at], &path[at + 1..]))
 }
 
 /// Where encoded variants are kept between runs: AVIF takes seconds an

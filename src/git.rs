@@ -39,7 +39,7 @@ fn git(root: &std::path::Path, args: &[&str]) -> Option<String> {
 impl GitInfo {
     /// `None` when git is missing or the root is not in a repository with a
     /// commit: the templates see `git` as null and leave the line out.
-    pub fn read(root: &std::path::Path) -> Option<GitInfo> {
+    pub fn read(root: &std::path::Path) -> Option<Self> {
         let commit = git(root, &["rev-parse", "--verify", "-q", "HEAD"])?;
         if commit.is_empty() {
             return None;
@@ -64,7 +64,7 @@ impl GitInfo {
         }
         sources.sort();
         sources.dedup();
-        Some(GitInfo {
+        Some(Self {
             commit,
             short,
             date,

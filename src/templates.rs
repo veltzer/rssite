@@ -215,10 +215,10 @@ pub fn page_view(site: &Site, i: usize) -> Value {
                     .iter()
                     .find(|t| t.name == *name && t.lang == page.file.lang)
                     .and_then(|t| t.terms.iter().find(|x| x.name == *term));
-                match found {
-                    Some(t) => json!({"name": t.name, "slug": t.slug, "permalink": t.permalink, "path": t.path}),
-                    None => json!({"name": term}),
-                }
+                found.map_or_else(
+                    || json!({"name": term}),
+                    |t| json!({"name": t.name, "slug": t.slug, "permalink": t.permalink, "path": t.path}),
+                )
             })
             .collect();
         taxonomies.insert(name.clone(), Value::Array(list));
@@ -329,7 +329,7 @@ pub fn language_view(site: &Site, code: &str) -> Value {
 }
 
 impl Model {
-    pub fn new(site: &Site, planned: BTreeSet<String>) -> Model {
+    pub fn new(site: &Site, planned: BTreeSet<String>) -> Self {
         let pages: Vec<Value> = (0..site.pages.len()).map(|i| page_view(site, i)).collect();
         let sections: Vec<Value> = (0..site.sections.len())
             .map(|i| section_view(site, i, &pages))
@@ -391,7 +391,7 @@ impl Model {
         }
         let mut config = serde_json::to_value(&site.config).expect("config serializes");
         config["extra"] = crate::util::toml_to_json(&toml::Value::Table(site.config.extra.clone()));
-        Model {
+        Self {
             config,
             languages: site
                 .config
@@ -621,7 +621,7 @@ fn register_lookups(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
             move |args: &HashMap<String, Value>| -> tera::Result<Value> {
                 let name = require_string(args, "name", "get_taxonomy")?;
                 let lang = lang_arg(args, "get_taxonomy", &lang, &model)?;
-                match model.taxonomy_lookup.get(&(lang.clone(), name.clone())) {
+                match model.taxonomy_lookup.get(&(lang, name.clone())) {
                     Some(&t) => Ok(model.taxonomies[t].clone()),
                     None => Err(err(format!(
                         "get_taxonomy: {name:?} is not a configured taxonomy"
@@ -632,7 +632,6 @@ fn register_lookups(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
     }
     {
         let model = Arc::clone(model);
-        let lang = lang.clone();
         tera.register_function("get_taxonomy_url", move |args: &HashMap<String, Value>| -> tera::Result<Value> {
             let name = require_string(args, "name", "get_taxonomy_url")?;
             let term_name = require_string(args, "term", "get_taxonomy_url")?;
@@ -640,10 +639,10 @@ fn register_lookups(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
             if !model.taxonomy_lookup.contains_key(&(lang.clone(), name.clone())) {
                 return Err(err(format!("get_taxonomy_url: {name:?} is not a configured taxonomy")));
             }
-            match model.term_lookup.get(&(lang.clone(), name.clone(), term_name.clone())) {
-                Some(permalink) => Ok(Value::String(permalink.clone())),
-                None => Err(err(format!("get_taxonomy_url: taxonomy {name:?} has no term {term_name:?} in language {lang}"))),
-            }
+            model.term_lookup.get(&(lang.clone(), name.clone(), term_name.clone())).map_or_else(
+                || Err(err(format!("get_taxonomy_url: taxonomy {name:?} has no term {term_name:?} in language {lang}"))),
+                |permalink| Ok(Value::String(permalink.clone())),
+            )
         });
     }
 }
@@ -653,7 +652,6 @@ fn register_get_url(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
     let lang = lang.to_owned();
     {
         let model = Arc::clone(model);
-        let lang = lang.clone();
         tera.register_function("get_url", move |args: &HashMap<String, Value>| -> tera::Result<Value> {
             let path = require_string(args, "path", "get_url")?;
             let lang = lang_arg(args, "get_url", &lang, &model)?;
@@ -769,7 +767,6 @@ fn register_filters(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
     let lang = lang.to_owned();
     {
         let model = Arc::clone(model);
-        let lang = lang.clone();
         tera.register_filter(
             "date",
             move |value: &Value, args: &HashMap<String, Value>| -> tera::Result<Value> {
