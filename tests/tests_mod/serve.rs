@@ -4,9 +4,7 @@
 //! source changes, tells open pages to reload after a good rebuild, and
 //! points the site's own absolute links at itself.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;

@@ -2,8 +2,6 @@
 //! binary in a scratch copy of a fixture, reading what it wrote, and
 //! editing the fixture's config and files between runs.
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

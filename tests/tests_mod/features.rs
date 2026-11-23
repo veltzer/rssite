@@ -4,9 +4,7 @@
 //! date formats and locale, `x_default` and `current`, meta descriptions,
 //! related pages, the search index, JSON-LD and the generated robots.txt.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use std::process::Command;
 
 // ── redirects ─────────────────────────────────────────────────────────────

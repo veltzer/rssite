@@ -2,9 +2,7 @@
 //! what `build` writes and leaves alone, what `clean` removes, what `query`
 //! and `version` print, how `init` refuses to clobber, and the exit codes.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use std::process::Command;
 
 // ── the plan's sources ────────────────────────────────────────────────────

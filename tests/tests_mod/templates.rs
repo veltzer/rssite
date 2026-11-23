@@ -2,9 +2,7 @@
 //! returns, what context every page sees, and that every misuse is a build
 //! error that names the problem rather than empty output.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 
 // ── the context every page gets ───────────────────────────────────────────
 

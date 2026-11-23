@@ -3,9 +3,7 @@
 //! deterministic, and every silent failure of the previous generator is a
 //! loud error here.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use std::process::Command;
 
 #[test]

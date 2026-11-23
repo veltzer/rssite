@@ -3,9 +3,7 @@
 //! the sitemap contain, and that every inconsistency is an error that names
 //! the file.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 
 const POST: &str = "+++\ntitle = \"T\"\ndate = 2026-01-01\n+++\n";
 
