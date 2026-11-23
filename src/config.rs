@@ -239,57 +239,101 @@ pub struct Slugify {
     pub anchors: SlugMode,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Markdown {
-    #[serde(default)]
-    pub smart_punctuation: bool,
-    #[serde(default = "default_true")]
-    pub highlight: bool,
+/// How code blocks are highlighted.
+#[derive(Clone, Debug)]
+pub struct Highlighting {
+    pub enabled: bool,
     /// A syntect theme name; its CSS is written to `highlight.css`.
-    #[serde(default = "default_highlight_theme")]
-    pub highlight_theme: String,
+    pub theme: String,
     /// Whether `highlight.css` is written. A site that colours the
     /// highlighter's scope classes in its own stylesheet (to follow its
     /// themes, say) sets this to false and gets the markup without the file.
-    #[serde(default = "default_true")]
-    pub highlight_css: bool,
-    /// `$…$` and `$$…$$` as math; a page or section can override it.
-    #[serde(default)]
-    pub math: bool,
-    /// Links leaving the site open in a new tab (`rel="noopener"` too).
-    #[serde(default)]
-    pub external_links_target_blank: bool,
-    #[serde(default)]
-    pub external_links_no_follow: bool,
-    #[serde(default)]
-    pub external_links_no_referrer: bool,
+    pub css: bool,
+}
+
+/// The `[markdown]` table. The file keeps one flat list of keys
+/// ([`MarkdownFile`]); in memory they are grouped by what they govern.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(from = "MarkdownFile", into = "MarkdownFile")]
+pub struct Markdown {
+    pub highlight: Highlighting,
+    /// Smart punctuation, math and emoji.
+    pub extensions: crate::markdown::Extensions,
+    pub external_links: crate::markdown::ExternalLinks,
     /// Fenced block languages left for a client-side renderer.
-    #[serde(default = "default_diagram_languages")]
     pub diagram_languages: Vec<String>,
     /// A `#` link on every heading: "none", "start" or "end".
-    #[serde(default)]
     pub heading_anchors: crate::markdown::HeadingAnchors,
+}
+
+/// The keys of `[markdown]` as they are written; an absent key is `None`
+/// and takes its default.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+struct MarkdownFile {
+    smart_punctuation: Option<bool>,
+    highlight: Option<bool>,
+    highlight_theme: Option<String>,
+    highlight_css: Option<bool>,
+    /// `$…$` and `$$…$$` as math; a page or section can override it.
+    math: Option<bool>,
+    /// Links leaving the site open in a new tab (`rel="noopener"` too).
+    external_links_target_blank: Option<bool>,
+    external_links_no_follow: Option<bool>,
+    external_links_no_referrer: Option<bool>,
+    diagram_languages: Option<Vec<String>>,
+    heading_anchors: Option<crate::markdown::HeadingAnchors>,
     /// `:rocket:` as 🚀.
-    #[serde(default)]
-    pub emoji: bool,
+    emoji: Option<bool>,
+}
+
+impl From<MarkdownFile> for Markdown {
+    fn from(file: MarkdownFile) -> Self {
+        Markdown {
+            highlight: Highlighting {
+                enabled: file.highlight.unwrap_or(true),
+                theme: file.highlight_theme.unwrap_or_else(default_highlight_theme),
+                css: file.highlight_css.unwrap_or(true),
+            },
+            extensions: crate::markdown::Extensions {
+                smart_punctuation: file.smart_punctuation.unwrap_or(false),
+                math: file.math.unwrap_or(false),
+                emoji: file.emoji.unwrap_or(false),
+            },
+            external_links: crate::markdown::ExternalLinks {
+                target_blank: file.external_links_target_blank.unwrap_or(false),
+                no_follow: file.external_links_no_follow.unwrap_or(false),
+                no_referrer: file.external_links_no_referrer.unwrap_or(false),
+            },
+            diagram_languages: file
+                .diagram_languages
+                .unwrap_or_else(default_diagram_languages),
+            heading_anchors: file.heading_anchors.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<Markdown> for MarkdownFile {
+    fn from(markdown: Markdown) -> Self {
+        MarkdownFile {
+            smart_punctuation: Some(markdown.extensions.smart_punctuation),
+            highlight: Some(markdown.highlight.enabled),
+            highlight_theme: Some(markdown.highlight.theme),
+            highlight_css: Some(markdown.highlight.css),
+            math: Some(markdown.extensions.math),
+            external_links_target_blank: Some(markdown.external_links.target_blank),
+            external_links_no_follow: Some(markdown.external_links.no_follow),
+            external_links_no_referrer: Some(markdown.external_links.no_referrer),
+            diagram_languages: Some(markdown.diagram_languages),
+            heading_anchors: Some(markdown.heading_anchors),
+            emoji: Some(markdown.extensions.emoji),
+        }
+    }
 }
 
 impl Default for Markdown {
     fn default() -> Self {
-        Markdown {
-            smart_punctuation: false,
-            highlight: true,
-            highlight_theme: default_highlight_theme(),
-            highlight_css: true,
-            math: false,
-            external_links_target_blank: false,
-            external_links_no_follow: false,
-            external_links_no_referrer: false,
-            diagram_languages: default_diagram_languages(),
-            heading_anchors: crate::markdown::HeadingAnchors::None,
-            emoji: false,
-        }
+        MarkdownFile::default().into()
     }
 }
 
@@ -297,19 +341,13 @@ impl Config {
     /// How markdown renders on this site, before any page's overrides.
     pub fn render_options(&self) -> crate::markdown::RenderOptions {
         crate::markdown::RenderOptions {
-            smart_punctuation: self.markdown.smart_punctuation,
-            highlight: self.markdown.highlight,
+            extensions: self.markdown.extensions,
+            highlight: self.markdown.highlight.enabled,
             anchor_mode: self.slugify.anchors,
-            math: self.markdown.math,
-            external_links: crate::markdown::ExternalLinks {
-                target_blank: self.markdown.external_links_target_blank,
-                no_follow: self.markdown.external_links_no_follow,
-                no_referrer: self.markdown.external_links_no_referrer,
-            },
+            external_links: self.markdown.external_links,
             base_url: self.base_url.clone(),
             diagrams: self.markdown.diagram_languages.clone(),
             heading_anchors: self.markdown.heading_anchors,
-            emoji: self.markdown.emoji,
             // Set per page, from its language's direction.
             code_ltr: false,
             // Set by the site, which knows its templates; the `markdown`
@@ -559,6 +597,15 @@ impl Config {
                 bail!("{CONFIG_FILE}: author_id names the author's @id, so author must be set too");
             }
         }
+        self.validate_languages()?;
+        let taxonomy_names = self.validate_taxonomies()?;
+        self.validate_paths()?;
+        self.validate_references(&taxonomy_names)?;
+        Ok(())
+    }
+
+    /// Language codes and prefixes; settles the fallback language.
+    fn validate_languages(&mut self) -> Result<()> {
         let mut seen = std::collections::BTreeSet::new();
         for language in &mut self.languages {
             if language.code.is_empty()
@@ -597,6 +644,11 @@ impl Config {
             }
             Some(_) => {}
         }
+        Ok(())
+    }
+
+    /// Taxonomies; returns their names.
+    fn validate_taxonomies(&mut self) -> Result<std::collections::BTreeSet<String>> {
         let mut names = std::collections::BTreeSet::new();
         for taxonomy in &mut self.taxonomies {
             if taxonomy.name.is_empty() {
@@ -639,6 +691,11 @@ impl Config {
                 }
             }
         }
+        Ok(names)
+    }
+
+    /// The directories and file names the generator reads and writes.
+    fn validate_paths(&mut self) -> Result<()> {
         for dir in [
             &mut self.content_dir,
             &mut self.templates_dir,
@@ -678,6 +735,12 @@ impl Config {
                 self.search.filename
             );
         }
+        Ok(())
+    }
+
+    /// Everything that points at something else: related taxonomies,
+    /// redirects, the theme, published directories.
+    fn validate_references(&mut self, names: &std::collections::BTreeSet<String>) -> Result<()> {
         for name in &self.related.taxonomies {
             if !names.contains(name) {
                 bail!(
@@ -811,9 +874,9 @@ mod tests {
         assert_eq!(config.feeds.filename, "atom.xml");
         assert!(config.sitemap.enabled);
         assert!(config.sitemap.pagers);
-        assert!(config.markdown.highlight);
-        assert!(!config.markdown.smart_punctuation);
-        assert_eq!(config.markdown.highlight_theme, "InspiredGitHub");
+        assert!(config.markdown.highlight.enabled);
+        assert!(!config.markdown.extensions.smart_punctuation);
+        assert_eq!(config.markdown.highlight.theme, "InspiredGitHub");
         assert_eq!(config.slugify.paths, SlugMode::Safe);
         assert_eq!(config.slugify.taxonomies, SlugMode::Safe);
         assert_eq!(config.slugify.anchors, SlugMode::Safe);
@@ -982,7 +1045,7 @@ mod tests {
     #[test]
     fn markdown_options_come_from_the_config() {
         let defaults = parse(MINIMAL).unwrap().render_options();
-        assert!(!defaults.math);
+        assert!(!defaults.extensions.math);
         assert!(!defaults.external_links.target_blank);
         assert!(!defaults.external_links.no_follow);
         assert!(!defaults.external_links.no_referrer);
@@ -991,7 +1054,7 @@ mod tests {
         );
         let config = parse(&text).unwrap();
         let options = config.render_options();
-        assert!(options.math);
+        assert!(options.extensions.math);
         assert!(options.external_links.target_blank);
         assert!(options.external_links.no_follow);
         assert!(options.external_links.no_referrer);
@@ -1001,7 +1064,7 @@ mod tests {
             defaults.heading_anchors,
             crate::markdown::HeadingAnchors::None
         );
-        assert!(!defaults.emoji);
+        assert!(!defaults.extensions.emoji);
         let text = format!(
             "{MINIMAL}[markdown]\ndiagram_languages = [\"mermaid\", \"dot\"]\nheading_anchors = \"end\"\nemoji = true\n"
         );
@@ -1011,7 +1074,7 @@ mod tests {
             options.heading_anchors,
             crate::markdown::HeadingAnchors::End
         );
-        assert!(options.emoji);
+        assert!(options.extensions.emoji);
         assert!(
             parse(&format!(
                 "{MINIMAL}[markdown]\nheading_anchors = \"left\"\n"
@@ -1043,9 +1106,9 @@ mod tests {
             "{MINIMAL}[markdown]\nsmart_punctuation = true\nhighlight = false\nhighlight_theme = \"base16-ocean.dark\"\n[feeds]\nlimit = 3\nfilename = \"feed.xml\"\n[sitemap]\nenabled = false\n[slugify]\npaths = \"ascii\"\nanchors = \"ascii\"\n[extra]\nyear = 2026\n[extra.nested]\nlist = [\"a\", \"b\"]\n"
         );
         let config = parse(&text).unwrap();
-        assert!(config.markdown.smart_punctuation);
-        assert!(!config.markdown.highlight);
-        assert_eq!(config.markdown.highlight_theme, "base16-ocean.dark");
+        assert!(config.markdown.extensions.smart_punctuation);
+        assert!(!config.markdown.highlight.enabled);
+        assert_eq!(config.markdown.highlight.theme, "base16-ocean.dark");
         assert_eq!(config.feeds.limit, 3);
         assert_eq!(config.feeds.filename, "feed.xml");
         assert!(!config.sitemap.enabled);

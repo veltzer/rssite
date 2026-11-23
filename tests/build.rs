@@ -62,7 +62,12 @@ fn every_output_names_its_sources() {
         home.contains(&"content/blog/third.en.md".to_owned()),
         "index.html reads the blog section: {home:?}"
     );
+}
 
+#[test]
+fn feeds_sitemaps_and_archives_name_their_sources() {
+    let dir = site("sources-feeds");
+    let plan = plan_of(&dir);
     let feed = sources_of(&plan, "_site/en/atom.xml");
     assert!(
         feed.contains(&"content/blog/third.en.md".to_owned())
@@ -102,7 +107,12 @@ fn every_output_names_its_sources() {
         sources_of(&plan, "_site/en/blog/data.csv"),
         ["content/blog/data.csv"]
     );
+}
 
+#[test]
+fn taxonomies_and_built_in_pages_name_their_sources() {
+    let dir = site("sources-taxonomies");
+    let plan = plan_of(&dir);
     let tags = sources_of(&plan, "_site/en/tags/index.html");
     assert!(
         tags.contains(&"i18n/tags.toml".to_owned())
@@ -409,7 +419,10 @@ fn the_output_directory_is_configurable_for_every_command() {
     assert!(planned_paths(&plan_of(&dir))[0].starts_with("out/www/"));
     let clean = run(&dir, &["clean"]);
     assert!(clean.ok);
-    assert!(files_under(&dir.join("out/www")).is_empty());
+    assert_eq!(
+        files_under(&dir.join("out/www")),
+        [] as [std::string::String; 0]
+    );
     assert!(
         dir.join("out/www").is_dir(),
         "the output directory itself stays"
@@ -553,7 +566,7 @@ fn query_prints_the_model_without_bodies() {
     let model: serde_json::Value = serde_json::from_str(&query.stdout).unwrap();
     assert_eq!(model["version"], 1);
     assert_eq!(
-        model["outputs"].as_u64().unwrap() as usize,
+        usize::try_from(model["outputs"].as_u64().unwrap()).unwrap(),
         planned_paths(&plan_of(&dir)).len()
     );
     assert_eq!(model["config"]["base_url"], "https://example.org");
@@ -1161,7 +1174,11 @@ fn image_site(name: &str, config: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(dir.join("static/img")).unwrap();
     for (file, w, h) in [("wide.png", 1000, 500), ("small.png", 300, 200)] {
         image::RgbImage::from_fn(w, h, |x, y| {
-            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+            image::Rgb([
+                u8::try_from(x % 256).unwrap(),
+                u8::try_from(y % 256).unwrap(),
+                90,
+            ])
         })
         .save(dir.join("static/img").join(file))
         .unwrap();

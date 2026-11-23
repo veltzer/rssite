@@ -118,7 +118,9 @@ fn parse_cli() -> Cli {
                     eprintln!(
                         "  {:<width$}  {}",
                         sub.get_name(),
-                        sub.get_about().map(|a| a.to_string()).unwrap_or_default()
+                        sub.get_about()
+                            .map(std::string::ToString::to_string)
+                            .unwrap_or_default()
                     );
                 }
                 eprintln!("Run 'rssite --help' for the options.");
@@ -190,8 +192,13 @@ fn run(cli: Cli) -> Result<()> {
             &cli.root,
             cli.drafts,
             port,
-            !no_watch,
-            !no_watch && !no_reload,
+            if no_watch {
+                serve::Watch::Off
+            } else if no_reload {
+                serve::Watch::Rebuild
+            } else {
+                serve::Watch::Reload
+            },
             !keep_base_url,
         ),
         Commands::Init { dir } => {

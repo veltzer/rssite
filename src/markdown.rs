@@ -1,4 +1,4 @@
-//! Markdown to HTML: CommonMark with tables, footnotes, strikethrough, task
+//! Markdown to HTML: `CommonMark` with tables, footnotes, strikethrough, task
 //! lists, definition lists, GitHub callouts and (opt-in) math and emoji
 //! shortcodes; heading ids, optional anchor links and a table of contents;
 //! build-time syntax highlighting with optional line numbers, highlighted
@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::sync::OnceLock;
 use syntect::html::{
     ClassStyle, ClassedHTMLGenerator, css_for_theme_with_class_style, line_tokens_to_classed_spans,
@@ -48,7 +49,7 @@ pub fn summary_of(html: &str) -> Option<String> {
         let name: String = tag
             .trim_start_matches('/')
             .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
+            .take_while(char::is_ascii_alphanumeric)
             .collect::<String>()
             .to_ascii_lowercase();
         if name.is_empty() {
@@ -63,7 +64,7 @@ pub fn summary_of(html: &str) -> Option<String> {
         }
     }
     for name in open.iter().rev() {
-        summary.push_str(&format!("</{name}>"));
+        let _ = write!(summary, "</{name}>");
     }
     Some(summary)
 }
@@ -89,14 +90,22 @@ pub struct Rendered {
     pub shortcodes: Vec<crate::shortcode::Call>,
 }
 
-#[derive(Clone, Debug)]
-pub struct RenderOptions {
+/// The markdown extensions a site or page switches on.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Extensions {
     pub smart_punctuation: bool,
-    pub highlight: bool,
-    pub anchor_mode: SlugMode,
     /// `$…$` and `$$…$$` become `<span class="math math-inline">` and
     /// `<span class="math math-display">` for a client-side renderer.
     pub math: bool,
+    /// `:rocket:` and the rest of GitHub's shortcodes as emoji.
+    pub emoji: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct RenderOptions {
+    pub extensions: Extensions,
+    pub highlight: bool,
+    pub anchor_mode: SlugMode,
     pub external_links: ExternalLinks,
     /// Links under this URL are the site's own, never external.
     pub base_url: String,
@@ -104,8 +113,6 @@ pub struct RenderOptions {
     /// client-side renderer (mermaid.js), neither highlighted nor numbered.
     pub diagrams: Vec<String>,
     pub heading_anchors: HeadingAnchors,
-    /// `:rocket:` and the rest of GitHub's shortcodes as emoji.
-    pub emoji: bool,
     /// The page is right to left: code blocks and inline code get
     /// `dir="ltr"`, so the bidi algorithm does not reorder them.
     pub code_ltr: bool,
@@ -128,7 +135,7 @@ pub enum HeadingAnchors {
 }
 
 /// What a markdown link that leaves the site gets.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ExternalLinks {
     /// `target="_blank"`, with `rel="noopener"`.
     pub target_blank: bool,
@@ -137,7 +144,7 @@ pub struct ExternalLinks {
 }
 
 impl ExternalLinks {
-    fn any(&self) -> bool {
+    fn any(self) -> bool {
         self.target_blank || self.no_follow || self.no_referrer
     }
 }
@@ -178,10 +185,9 @@ pub fn highlight_css(theme: &str) -> Result<String> {
         );
     };
     let mut css = css_for_theme_with_class_style(theme, ClassStyle::Spaced)?;
-    let mark = theme
-        .settings
-        .line_highlight
-        .map(|c| {
+    let mark = theme.settings.line_highlight.map_or_else(
+        || "rgba(255, 220, 0, 0.25)".to_owned(),
+        |c| {
             format!(
                 "rgba({}, {}, {}, {:.3})",
                 c.r,
@@ -189,15 +195,16 @@ pub fn highlight_css(theme: &str) -> Result<String> {
                 c.b,
                 f32::from(c.a) / 255.0
             )
-        })
-        .unwrap_or_else(|| "rgba(255, 220, 0, 0.25)".to_owned());
-    css.push_str(&format!(
+        },
+    );
+    let _ = write!(
+        css,
         "\n/* Code block lines, present only with linenos or hl_lines. */\n\
          pre code .line {{ display: block; }}\n\
          pre code .line.hl {{ background-color: {mark}; }}\n\
          pre code .line[data-line]::before {{ content: attr(data-line); display: inline-block; \
          min-width: 3ch; margin-inline-end: 1.5ch; text-align: end; opacity: 0.5; user-select: none; }}\n"
-    ));
+    );
     Ok(css)
 }
 
@@ -293,7 +300,7 @@ fn wrap_lines(lines: &[String], fence: &Fence) -> Result<String> {
         }
         out.push('"');
         if fence.linenos {
-            out.push_str(&format!(" data-line=\"{}\"", fence.linenostart + i));
+            let _ = write!(out, " data-line=\"{}\"", fence.linenostart + i);
         }
         out.push('>');
         out.push_str(line);
@@ -395,222 +402,38 @@ pub fn render_with_images(
         | Options::ENABLE_HEADING_ATTRIBUTES
         | Options::ENABLE_DEFINITION_LIST
         | Options::ENABLE_GFM;
-    if options.smart_punctuation {
+    if options.extensions.smart_punctuation {
         parser_options |= Options::ENABLE_SMART_PUNCTUATION;
     }
     // Opt-in: with it on, two dollar amounts in one sentence are a formula.
-    if options.math {
+    if options.extensions.math {
         parser_options |= Options::ENABLE_MATH;
     }
     let parser = Parser::new_ext(markdown, parser_options);
 
-    let mut events: Vec<Event> = Vec::new();
-    let mut links = Vec::new();
-    let mut word_count = 0usize;
-    let mut headings: Vec<(u8, String, String)> = Vec::new();
-    let mut used_ids: BTreeMap<String, usize> = BTreeMap::new();
-    let mut taken_ids: BTreeSet<String> = BTreeSet::new();
-    let mut heading: Option<(u8, Option<String>, String, usize)> = None;
-    let mut code: Option<(Fence, String)> = None;
-    let mut image: Option<OpenImage> = None;
-
+    let mut state = EventState {
+        options,
+        resolve,
+        images,
+        events: Vec::new(),
+        links: Vec::new(),
+        word_count: 0,
+        headings: Vec::new(),
+        ids: HeadingIds::default(),
+        heading: None,
+        code: None,
+        image: None,
+    };
     for event in parser {
-        if let Some(open) = image.as_mut() {
-            match event {
-                Event::End(TagEnd::Image) => {
-                    let open = image.take().expect("image was opened");
-                    let Tag::Image {
-                        dest_url, title, ..
-                    } = &open.tag
-                    else {
-                        unreachable!("only images are opened");
-                    };
-                    let writer = images.expect("images are opened only with a writer");
-                    match writer(dest_url, &open.alt, title)? {
-                        Some(html) => events.push(Event::InlineHtml(CowStr::from(html))),
-                        None => {
-                            events.push(Event::Start(open.tag));
-                            events.extend(open.events);
-                            events.push(Event::End(TagEnd::Image));
-                        }
-                    }
-                }
-                Event::Text(text) | Event::Code(text) => {
-                    word_count += text.split_whitespace().count();
-                    open.alt.push_str(&text);
-                    open.events.push(Event::Text(text));
-                }
-                other => open.events.push(other),
-            }
-            continue;
-        }
-        match event {
-            Event::Start(Tag::CodeBlock(kind)) => {
-                let fence = match kind {
-                    CodeBlockKind::Fenced(info) => Fence::parse(&info)?,
-                    CodeBlockKind::Indented => Fence::parse("")?,
-                };
-                code = Some((fence, String::new()));
-            }
-            Event::Text(text) if code.is_some() => {
-                if let Some((_, buffer)) = code.as_mut() {
-                    buffer.push_str(&text);
-                }
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                let (fence, buffer) = code.take().expect("code block was opened");
-                word_count += buffer.split_whitespace().count();
-                let html = if options.diagrams.contains(&fence.lang) {
-                    diagram(&buffer, &fence.lang)
-                } else if options.highlight {
-                    highlight(&buffer, &fence)?
-                } else {
-                    highlight_plain(&buffer, &fence)?
-                };
-                let html = frame_block(html, &fence, options.code_ltr);
-                events.push(Event::Html(CowStr::from(html)));
-            }
-            Event::Start(Tag::Heading {
-                level,
-                id,
-                classes,
-                attrs,
-            }) => {
-                heading = Some((
-                    level as u8,
-                    id.as_ref().map(|i| i.to_string()),
-                    String::new(),
-                    events.len(),
-                ));
-                events.push(Event::Start(Tag::Heading {
-                    level,
-                    id,
-                    classes,
-                    attrs,
-                }));
-            }
-            Event::End(TagEnd::Heading(level)) => {
-                let (lvl, explicit, text, start) = heading.take().expect("heading was opened");
-                let base = explicit.unwrap_or_else(|| slugify(&text, options.anchor_mode));
-                let base = if base.is_empty() {
-                    format!("section-{}", headings.len() + 1)
-                } else {
-                    base
-                };
-                let count = used_ids.entry(base.clone()).or_insert(0);
-                let mut id = if *count == 0 {
-                    base.clone()
-                } else {
-                    format!("{base}-{count}")
-                };
-                *count += 1;
-                // A numbered id can be one a heading already has: `a`, `a`
-                // and then a heading titled `a-1`.
-                while taken_ids.contains(&id) {
-                    id = format!("{base}-{count}");
-                    *count += 1;
-                }
-                taken_ids.insert(id.clone());
-                if let Event::Start(Tag::Heading { id: slot, .. }) = &mut events[start] {
-                    *slot = Some(CowStr::from(id.clone()));
-                }
-                // Hidden from screen readers and the tab order: the heading
-                // itself is what they announce, the `#` is for pointing.
-                let anchor = || {
-                    Event::InlineHtml(CowStr::from(format!(
-                        "<a class=\"heading-anchor\" href=\"#{}\" aria-hidden=\"true\" tabindex=\"-1\">#</a>",
-                        crate::util::escape_html(&id)
-                    )))
-                };
-                match options.heading_anchors {
-                    HeadingAnchors::None => {}
-                    HeadingAnchors::Start => {
-                        events.insert(start + 1, anchor());
-                        events.insert(start + 2, Event::InlineHtml(CowStr::from(" ")));
-                    }
-                    HeadingAnchors::End => {
-                        events.push(Event::InlineHtml(CowStr::from(" ")));
-                        events.push(anchor());
-                    }
-                }
-                headings.push((lvl, id, text));
-                events.push(Event::End(TagEnd::Heading(level)));
-            }
-            Event::Start(Tag::Link {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let dest = resolve_dest(&dest_url, resolve, &mut links)?;
-                if options.external_links.any() && is_external(&dest, &options.base_url) {
-                    // The writer still closes it: `TagEnd::Link` is `</a>`.
-                    events.push(Event::InlineHtml(CowStr::from(external_link_open(
-                        &dest,
-                        &title,
-                        &options.external_links,
-                    ))));
-                } else {
-                    events.push(Event::Start(Tag::Link {
-                        link_type,
-                        dest_url: CowStr::from(dest),
-                        title,
-                        id,
-                    }));
-                }
-            }
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => {
-                let dest = resolve_dest(&dest_url, resolve, &mut links)?;
-                let tag = Tag::Image {
-                    link_type,
-                    dest_url: CowStr::from(dest),
-                    title,
-                    id,
-                };
-                if images.is_some() {
-                    image = Some(OpenImage {
-                        tag,
-                        events: Vec::new(),
-                        alt: String::new(),
-                    });
-                } else {
-                    events.push(Event::Start(tag));
-                }
-            }
-            Event::Text(text) => {
-                word_count += text.split_whitespace().count();
-                let text = match options.emoji.then(|| replace_emoji(&text)).flatten() {
-                    Some(replaced) => CowStr::from(replaced),
-                    None => text,
-                };
-                if let Some((_, _, buffer, _)) = heading.as_mut() {
-                    buffer.push_str(&text);
-                }
-                events.push(Event::Text(text));
-            }
-            Event::Code(text) => {
-                word_count += text.split_whitespace().count();
-                if let Some((_, _, buffer, _)) = heading.as_mut() {
-                    buffer.push_str(&text);
-                }
-                if options.code_ltr {
-                    let mut html = String::from("<code dir=\"ltr\">");
-                    pulldown_cmark_escape::escape_html_body_text(&mut html, &text)
-                        .expect("writing to a String");
-                    html.push_str("</code>");
-                    events.push(Event::InlineHtml(CowStr::from(html)));
-                } else {
-                    events.push(Event::Code(text));
-                }
-            }
-            other => events.push(other),
-        }
+        state.handle(event)?;
     }
+    let EventState {
+        events,
+        mut links,
+        word_count,
+        headings,
+        ..
+    } = state;
 
     let mut html = String::with_capacity(markdown.len() * 3 / 2);
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
@@ -637,6 +460,282 @@ pub fn render_with_images(
         links,
         shortcodes,
     })
+}
+
+/// The heading ids handed out so far.
+#[derive(Default)]
+struct HeadingIds {
+    used: BTreeMap<String, usize>,
+    taken: BTreeSet<String>,
+}
+
+impl HeadingIds {
+    /// A unique id for a heading whose slug is `base`.
+    fn assign(&mut self, base: &str) -> String {
+        let count = self.used.entry(base.to_owned()).or_insert(0);
+        let mut id = if *count == 0 {
+            base.to_owned()
+        } else {
+            format!("{base}-{count}")
+        };
+        *count += 1;
+        // A numbered id can be one a heading already has: `a`, `a`
+        // and then a heading titled `a-1`.
+        while self.taken.contains(&id) {
+            id = format!("{base}-{count}");
+            *count += 1;
+        }
+        self.taken.insert(id.clone());
+        id
+    }
+}
+
+/// Everything the event loop of `render_with_images` carries from one event
+/// to the next.
+struct EventState<'a, 'e> {
+    options: &'a RenderOptions,
+    resolve: &'a LinkResolver<'a>,
+    images: Option<&'a ImageWriter<'a>>,
+    events: Vec<Event<'e>>,
+    links: Vec<String>,
+    word_count: usize,
+    headings: Vec<(u8, String, String)>,
+    ids: HeadingIds,
+    /// Level, explicit id, text so far, and the index of its start event.
+    heading: Option<(u8, Option<String>, String, usize)>,
+    code: Option<(Fence, String)>,
+    image: Option<OpenImage<'e>>,
+}
+
+impl<'e> EventState<'_, 'e> {
+    fn handle(&mut self, event: Event<'e>) -> Result<()> {
+        if let Some(open) = self.image.as_mut() {
+            match event {
+                Event::End(TagEnd::Image) => self.finish_image()?,
+                Event::Text(text) | Event::Code(text) => {
+                    self.word_count += text.split_whitespace().count();
+                    open.alt.push_str(&text);
+                    open.events.push(Event::Text(text));
+                }
+                other => open.events.push(other),
+            }
+            return Ok(());
+        }
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let fence = match kind {
+                    CodeBlockKind::Fenced(info) => Fence::parse(&info)?,
+                    CodeBlockKind::Indented => Fence::parse("")?,
+                };
+                self.code = Some((fence, String::new()));
+            }
+            Event::Text(text) if self.code.is_some() => {
+                if let Some((_, buffer)) = self.code.as_mut() {
+                    buffer.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => self.finish_code_block()?,
+            Event::Start(Tag::Heading {
+                level,
+                id,
+                classes,
+                attrs,
+            }) => {
+                self.heading = Some((
+                    level as u8,
+                    id.as_ref().map(std::string::ToString::to_string),
+                    String::new(),
+                    self.events.len(),
+                ));
+                self.events.push(Event::Start(Tag::Heading {
+                    level,
+                    id,
+                    classes,
+                    attrs,
+                }));
+            }
+            Event::End(TagEnd::Heading(level)) => self.finish_heading(level),
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => self.start_link(link_type, &dest_url, title, id)?,
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => self.start_image(link_type, &dest_url, title, id)?,
+            Event::Text(text) => self.text(text),
+            Event::Code(text) => self.inline_code(text),
+            other => self.events.push(other),
+        }
+        Ok(())
+    }
+
+    fn start_link(
+        &mut self,
+        link_type: pulldown_cmark::LinkType,
+        dest_url: &str,
+        title: CowStr<'e>,
+        id: CowStr<'e>,
+    ) -> Result<()> {
+        let dest = resolve_dest(dest_url, self.resolve, &mut self.links)?;
+        let options = self.options;
+        if options.external_links.any() && is_external(&dest, &options.base_url) {
+            // The writer still closes it: `TagEnd::Link` is `</a>`.
+            self.events
+                .push(Event::InlineHtml(CowStr::from(external_link_open(
+                    &dest,
+                    &title,
+                    options.external_links,
+                ))));
+        } else {
+            self.events.push(Event::Start(Tag::Link {
+                link_type,
+                dest_url: CowStr::from(dest),
+                title,
+                id,
+            }));
+        }
+
+        Ok(())
+    }
+
+    fn start_image(
+        &mut self,
+        link_type: pulldown_cmark::LinkType,
+        dest_url: &str,
+        title: CowStr<'e>,
+        id: CowStr<'e>,
+    ) -> Result<()> {
+        let dest = resolve_dest(dest_url, self.resolve, &mut self.links)?;
+        let tag = Tag::Image {
+            link_type,
+            dest_url: CowStr::from(dest),
+            title,
+            id,
+        };
+        if self.images.is_some() {
+            self.image = Some(OpenImage {
+                tag,
+                events: Vec::new(),
+                alt: String::new(),
+            });
+        } else {
+            self.events.push(Event::Start(tag));
+        }
+
+        Ok(())
+    }
+
+    fn text(&mut self, text: CowStr<'e>) {
+        self.word_count += text.split_whitespace().count();
+        let text = match self
+            .options
+            .extensions
+            .emoji
+            .then(|| replace_emoji(&text))
+            .flatten()
+        {
+            Some(replaced) => CowStr::from(replaced),
+            None => text,
+        };
+        if let Some((_, _, buffer, _)) = self.heading.as_mut() {
+            buffer.push_str(&text);
+        }
+        self.events.push(Event::Text(text));
+    }
+
+    fn inline_code(&mut self, text: CowStr<'e>) {
+        self.word_count += text.split_whitespace().count();
+        if let Some((_, _, buffer, _)) = self.heading.as_mut() {
+            buffer.push_str(&text);
+        }
+        if self.options.code_ltr {
+            let mut html = String::from("<code dir=\"ltr\">");
+            pulldown_cmark_escape::escape_html_body_text(&mut html, &text)
+                .expect("writing to a String");
+            html.push_str("</code>");
+            self.events.push(Event::InlineHtml(CowStr::from(html)));
+        } else {
+            self.events.push(Event::Code(text));
+        }
+    }
+
+    /// The end of an image: offered to the image writer, which may replace
+    /// it; otherwise the tag and its alt-text events go back as they were.
+    fn finish_image(&mut self) -> Result<()> {
+        let open = self.image.take().expect("image was opened");
+        let Tag::Image {
+            dest_url, title, ..
+        } = &open.tag
+        else {
+            unreachable!("only images are opened");
+        };
+        let writer = self.images.expect("images are opened only with a writer");
+        if let Some(html) = writer(dest_url, &open.alt, title)? {
+            self.events.push(Event::InlineHtml(CowStr::from(html)));
+        } else {
+            self.events.push(Event::Start(open.tag));
+            self.events.extend(open.events);
+            self.events.push(Event::End(TagEnd::Image));
+        }
+        Ok(())
+    }
+
+    fn finish_code_block(&mut self) -> Result<()> {
+        let (fence, buffer) = self.code.take().expect("code block was opened");
+        self.word_count += buffer.split_whitespace().count();
+        let html = if self.options.diagrams.contains(&fence.lang) {
+            diagram(&buffer, &fence.lang)
+        } else if self.options.highlight {
+            highlight(&buffer, &fence)?
+        } else {
+            highlight_plain(&buffer, &fence)?
+        };
+        let html = frame_block(html, &fence, self.options.code_ltr);
+        self.events.push(Event::Html(CowStr::from(html)));
+        Ok(())
+    }
+
+    /// The end of a heading: its id is settled, its anchor written.
+    fn finish_heading(&mut self, level: pulldown_cmark::HeadingLevel) {
+        let (lvl, explicit, text, start) = self.heading.take().expect("heading was opened");
+        let base = explicit.unwrap_or_else(|| slugify(&text, self.options.anchor_mode));
+        let base = if base.is_empty() {
+            format!("section-{}", self.headings.len() + 1)
+        } else {
+            base
+        };
+        let id = self.ids.assign(&base);
+        if let Event::Start(Tag::Heading { id: slot, .. }) = &mut self.events[start] {
+            *slot = Some(CowStr::from(id.clone()));
+        }
+        // Hidden from screen readers and the tab order: the heading
+        // itself is what they announce, the `#` is for pointing.
+        let anchor = || {
+            Event::InlineHtml(CowStr::from(format!(
+                "<a class=\"heading-anchor\" href=\"#{}\" aria-hidden=\"true\" tabindex=\"-1\">#</a>",
+                crate::util::escape_html(&id)
+            )))
+        };
+        match self.options.heading_anchors {
+            HeadingAnchors::None => {}
+            HeadingAnchors::Start => {
+                self.events.insert(start + 1, anchor());
+                self.events
+                    .insert(start + 2, Event::InlineHtml(CowStr::from(" ")));
+            }
+            HeadingAnchors::End => {
+                self.events.push(Event::InlineHtml(CowStr::from(" ")));
+                self.events.push(anchor());
+            }
+        }
+        self.headings.push((lvl, id, text));
+        self.events.push(Event::End(TagEnd::Heading(level)));
+    }
 }
 
 fn highlight_plain(code: &str, fence: &Fence) -> Result<String> {
@@ -714,7 +813,7 @@ fn is_external(dest: &str, base_url: &str) -> bool {
 
 /// The opening `<a>` of an external link, written by hand because the HTML
 /// writer has no way to add attributes.
-fn external_link_open(dest: &str, title: &str, links: &ExternalLinks) -> String {
+fn external_link_open(dest: &str, title: &str, links: ExternalLinks) -> String {
     let mut out = String::from("<a href=\"");
     pulldown_cmark_escape::escape_href(&mut out, dest).expect("writing to a String");
     out.push('"');
@@ -734,7 +833,7 @@ fn external_link_open(dest: &str, title: &str, links: &ExternalLinks) -> String 
         rel.push("noreferrer");
     }
     if !rel.is_empty() {
-        out.push_str(&format!(" rel=\"{}\"", rel.join(" ")));
+        let _ = write!(out, " rel=\"{}\"", rel.join(" "));
     }
     if links.target_blank {
         out.push_str(" target=\"_blank\"");
@@ -788,15 +887,13 @@ mod tests {
 
     fn opts() -> RenderOptions {
         RenderOptions {
-            smart_punctuation: false,
+            extensions: Extensions::default(),
             highlight: false,
             anchor_mode: SlugMode::Safe,
-            math: false,
             external_links: ExternalLinks::default(),
             base_url: "https://x".to_owned(),
             diagrams: vec!["mermaid".to_owned()],
             heading_anchors: HeadingAnchors::None,
-            emoji: false,
             code_ltr: false,
             shortcodes: None,
             first_line: 1,
@@ -996,7 +1093,7 @@ mod tests {
         assert!(out.toc.is_empty());
         assert!(out.summary.is_none());
         assert_eq!(out.word_count, 2);
-        assert!(out.links.is_empty());
+        assert_eq!(out.links.len(), 0);
     }
 
     #[test]
@@ -1047,7 +1144,10 @@ mod tests {
             plain.html
         );
         let smart = RenderOptions {
-            smart_punctuation: true,
+            extensions: Extensions {
+                smart_punctuation: true,
+                ..Extensions::default()
+            },
             ..opts()
         };
         let curly = render(text, &smart, &no_links).unwrap();
@@ -1275,7 +1375,10 @@ mod tests {
         assert!(!plain.html.contains("class=\"math"), "{}", plain.html);
         assert!(plain.html.contains("$x^2$"), "{}", plain.html);
         let math = RenderOptions {
-            math: true,
+            extensions: Extensions {
+                math: true,
+                ..Extensions::default()
+            },
             ..opts()
         };
         let out = render(text, &math, &no_links).unwrap();
@@ -1569,7 +1672,10 @@ mod tests {
         let plain = render(text, &opts(), &no_links).unwrap();
         assert!(!plain.html.contains('🚀'), "{}", plain.html);
         let emoji = RenderOptions {
-            emoji: true,
+            extensions: Extensions {
+                emoji: true,
+                ..Extensions::default()
+            },
             ..opts()
         };
         let out = render(text, &emoji, &no_links).unwrap();

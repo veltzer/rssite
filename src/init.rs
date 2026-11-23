@@ -222,7 +222,7 @@ fn main() {
     ),
     (
         "sass/style.scss",
-        r#"$width: 42rem;
+        r"$width: 42rem;
 
 body {
   max-width: $width;
@@ -240,7 +240,7 @@ pre {
   overflow-x: auto;
   padding: 1rem;
 }
-"#,
+",
     ),
 ];
 

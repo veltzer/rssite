@@ -178,7 +178,7 @@ fn serve_redirects_directories_to_their_slash_form() {
     let redirect = request(&server, "GET", "/en/blog");
     assert_eq!(redirect.status, "301 Moved Permanently");
     assert_eq!(redirect.header("Location"), Some("/en/blog/"));
-    assert!(redirect.body.is_empty());
+    assert_eq!(redirect.body, [] as [u8; 0]);
     let with_query = request(&server, "GET", "/en/blog?x=1");
     assert_eq!(with_query.status, "301 Moved Permanently");
     assert_eq!(
@@ -225,7 +225,7 @@ fn serve_answers_404_with_the_site_page_and_refuses_other_methods() {
     );
     let head_missing = request(&server, "HEAD", "/nope/");
     assert_eq!(head_missing.status, "404 Not Found");
-    assert!(head_missing.body.is_empty());
+    assert_eq!(head_missing.body, [] as [u8; 0]);
 }
 
 #[test]

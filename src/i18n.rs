@@ -203,18 +203,17 @@ impl Translations {
     /// The translation of `key`, or an error naming the file it is missing
     /// from. Never a silent fallback to another language.
     pub fn get(&self, key: &str) -> Result<&str> {
-        match self.strings.get(key) {
-            Some(s) => Ok(s),
-            None => {
-                let file = match self.paths.last() {
-                    Some(p) => p.display().to_string(),
-                    None => format!("i18n/{}.toml (no such file)", self.code),
-                };
-                bail!(
-                    "translation key {key:?} is missing for language {:?} in {file}",
-                    self.code
-                )
-            }
+        if let Some(s) = self.strings.get(key) {
+            Ok(s)
+        } else {
+            let file = match self.paths.last() {
+                Some(p) => p.display().to_string(),
+                None => format!("i18n/{}.toml (no such file)", self.code),
+            };
+            bail!(
+                "translation key {key:?} is missing for language {:?} in {file}",
+                self.code
+            )
         }
     }
 }
@@ -510,7 +509,7 @@ mod tests {
     fn a_missing_file_is_an_empty_table_with_english_dates() {
         let dir = temp("missing");
         let t = Translations::load(&dir, "en").unwrap();
-        assert!(t.paths.is_empty());
+        assert_eq!(t.paths.len(), 0);
         assert!(t.strings.is_empty());
         assert_eq!(t.dates.months[0], "January");
         let error = t.get("nav").unwrap_err().to_string();
@@ -624,7 +623,7 @@ mod tests {
         assert_eq!(only_theme.dates.months[0], "t1");
         // No layer at all.
         let none = Translations::load_layered(&[], "en").unwrap();
-        assert!(none.paths.is_empty());
+        assert_eq!(none.paths.len(), 0);
         assert_eq!(none.code, "en");
         std::fs::remove_dir_all(&dir).unwrap();
     }

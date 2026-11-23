@@ -16,6 +16,7 @@ use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageReader};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -157,6 +158,60 @@ pub struct Picture {
     pub variants: Vec<(String, Variant)>,
 }
 
+/// The markup for a picture: `own` is the source format's srcset, `src` the
+/// image the `<img>` falls back to as (url, width, height), `sources` one
+/// srcset per extra format.
+fn picture_html(
+    config: &Images,
+    alt: &str,
+    title: &str,
+    own: &[(String, u32)],
+    sources: &[(Format, Vec<(String, u32)>)],
+    (src, src_width, height): (&str, u32, u32),
+) -> String {
+    let esc = crate::util::escape_html;
+    let srcset = |set: &[(String, u32)]| -> String {
+        set.iter()
+            .map(|(url, w)| format!("{} {w}w", esc(url)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let sizes = esc(&config.sizes);
+    let mut img = format!("<img src=\"{}\"", esc(src));
+    if own.len() > 1 {
+        let _ = write!(img, " srcset=\"{}\" sizes=\"{sizes}\"", srcset(own));
+    }
+    let _ = write!(
+        img,
+        " width=\"{src_width}\" height=\"{}\" alt=\"{}\"",
+        height,
+        esc(alt)
+    );
+    if !title.is_empty() {
+        let _ = write!(img, " title=\"{}\"", esc(title));
+    }
+    if config.lazy {
+        img.push_str(" loading=\"lazy\"");
+    }
+    img.push_str(" decoding=\"async\" />");
+    if sources.is_empty() {
+        img
+    } else {
+        let mut html = String::from("<picture>");
+        for (format, set) in sources {
+            let _ = write!(
+                html,
+                "<source type=\"{}\" srcset=\"{}\" sizes=\"{sizes}\" />",
+                format.mime(),
+                srcset(set)
+            );
+        }
+        html.push_str(&img);
+        html.push_str("</picture>");
+        html
+    }
+}
+
 /// The `<picture>` (or, with nothing to choose between, the `<img>`) for an
 /// image written as `dest` whose original is published at `out_path`.
 pub fn picture(
@@ -174,7 +229,7 @@ pub fn picture(
     let height_at = |w: u32| -> u32 {
         let h = (u64::from(info.height) * u64::from(w) + u64::from(info.width) / 2)
             / u64::from(info.width.max(1));
-        (h as u32).max(1)
+        u32::try_from(h).unwrap_or(u32::MAX).max(1)
     };
 
     let mut variants = Vec::new();
@@ -242,45 +297,14 @@ pub fn picture(
     }
     let (src, src_width) = own.last().cloned().unwrap_or((dest.to_owned(), info.width));
 
-    let esc = crate::util::escape_html;
-    let srcset = |set: &[(String, u32)]| -> String {
-        set.iter()
-            .map(|(url, w)| format!("{} {w}w", esc(url)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let sizes = esc(&config.sizes);
-    let mut img = format!("<img src=\"{}\"", esc(&src));
-    if own.len() > 1 {
-        img.push_str(&format!(" srcset=\"{}\" sizes=\"{sizes}\"", srcset(&own)));
-    }
-    img.push_str(&format!(
-        " width=\"{src_width}\" height=\"{}\" alt=\"{}\"",
-        height_at(src_width),
-        esc(alt)
-    ));
-    if !title.is_empty() {
-        img.push_str(&format!(" title=\"{}\"", esc(title)));
-    }
-    if config.lazy {
-        img.push_str(" loading=\"lazy\"");
-    }
-    img.push_str(" decoding=\"async\" />");
-    let html = if sources.is_empty() {
-        img
-    } else {
-        let mut html = String::from("<picture>");
-        for (format, set) in &sources {
-            html.push_str(&format!(
-                "<source type=\"{}\" srcset=\"{}\" sizes=\"{sizes}\" />",
-                format.mime(),
-                srcset(set)
-            ));
-        }
-        html.push_str(&img);
-        html.push_str("</picture>");
-        html
-    };
+    let html = picture_html(
+        config,
+        alt,
+        title,
+        &own,
+        &sources,
+        (&src, src_width, height_at(src_width)),
+    );
     Picture { html, variants }
 }
 
@@ -395,8 +419,7 @@ type Slot = Mutex<Option<Result<Vec<u8>>>>;
 /// another, and these are the slow ones.
 pub fn encode_all(variants: &[&Variant]) -> Result<Vec<Vec<u8>>> {
     let threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+        .map_or(1, std::num::NonZero::get)
         .min(variants.len().max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<Slot> = variants.iter().map(|_| Mutex::new(None)).collect();
@@ -523,7 +546,7 @@ mod tests {
             "a \"quote\"",
             "",
         );
-        assert!(p.variants.is_empty());
+        assert_eq!(p.variants.len(), 0);
         assert_eq!(
             p.html,
             "<img src=\"a.png\" width=\"100\" height=\"50\" alt=\"a &quot;quote&quot;\" decoding=\"async\" />"
@@ -545,7 +568,7 @@ mod tests {
             "",
             "",
         );
-        assert!(p.variants.is_empty());
+        assert_eq!(p.variants.len(), 0);
         assert!(
             p.html
                 .starts_with("<img src=\"a.gif\" width=\"2000\" height=\"1000\"")

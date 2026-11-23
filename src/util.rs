@@ -105,6 +105,12 @@ pub fn escape_html(text: &str) -> String {
     out
 }
 
+/// Elements that join the text around them rather than separating words.
+const INLINE: &[&str] = &[
+    "a", "abbr", "b", "cite", "code", "del", "em", "i", "ins", "kbd", "mark", "q", "s", "small",
+    "span", "strong", "sub", "sup", "time", "u",
+];
+
 /// The text of an HTML fragment: tags dropped (with what `<script>` and
 /// `<style>` hold), the common entities decoded, whitespace collapsed.
 pub fn html_to_text(html: &str) -> String {
@@ -121,10 +127,6 @@ pub fn html_to_text(html: &str) -> String {
             .take_while(char::is_ascii_alphanumeric)
             .collect::<String>()
             .to_ascii_lowercase();
-        const INLINE: &[&str] = &[
-            "a", "abbr", "b", "cite", "code", "del", "em", "i", "ins", "kbd", "mark", "q", "s",
-            "small", "span", "strong", "sub", "sup", "time", "u",
-        ];
         if !INLINE.contains(&name.as_str()) {
             out.push(' ');
         }
@@ -480,7 +482,7 @@ mod tests {
     #[test]
     fn walk_files_is_sorted_and_tolerates_a_missing_directory() {
         let dir = temp("walk");
-        assert!(walk_files(&dir.join("nope")).unwrap().is_empty());
+        assert_eq!(walk_files(&dir.join("nope")).unwrap().len(), 0);
         for name in ["b.txt", "a/z.txt", "a/b/c.txt", "a.txt"] {
             let path = dir.join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

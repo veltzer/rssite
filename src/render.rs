@@ -7,6 +7,7 @@ use crate::templates::{self, Engine, Model};
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ impl Report {
     pub fn counts(&self) -> String {
         let mut text = format!("{} written, {} unchanged", self.written, self.unchanged);
         if self.removed > 0 {
-            text.push_str(&format!(", {} removed", self.removed));
+            let _ = write!(text, ", {} removed", self.removed);
         }
         text
     }
@@ -185,6 +186,102 @@ fn replace_markers(item: &mut Value, outputs: &[String]) {
     }
 }
 
+/// Render the body of every page written in Tera, filling in what only
+/// exists once the body does: content, summary, word count, description.
+fn render_tera_pages(
+    site: &Site,
+    model: &mut Model,
+    engines: &mut BTreeMap<String, Engine>,
+) -> Result<()> {
+    for i in 0..site.pages.len() {
+        let source = site.pages[i].body_source.unwrap_or(i);
+        if site.pages[source].file.body_kind != crate::content::BodyKind::Tera {
+            continue;
+        }
+        let page = &site.pages[i];
+        let lang = &page.file.lang;
+        let body = &site.pages[source].file.body;
+        let what = &page.file.rel;
+        let mut context = base_context_from(site, model, lang, &page.path);
+        context.insert("page", &model.pages[i]);
+        context.insert("section", &light(&model.sections[page.section]));
+        context.insert("meta_description", &model.pages[i]["meta_description"]);
+        insert_translations(&mut context, &model.pages[i]["translations"], site);
+        let engine = engines.get_mut(lang).expect("engine per language");
+        let html = templates::render_str(engine, body, &context, what).with_context(|| {
+            format!(
+                "producing {}index.html",
+                crate::plan::strip_root(&page.path)
+            )
+        })?;
+        let summary = crate::markdown::summary_of(&html);
+        let words = html.split_whitespace().count();
+        model.pages[i]["content"] = Value::String(html);
+        model.pages[i]["summary"] = match summary {
+            Some(s) => Value::String(s),
+            None => Value::Null,
+        };
+        model.pages[i]["word_count"] = json!(words);
+        model.pages[i]["reading_time"] = json!(words.div_ceil(200).max(1));
+        // The body only exists now, so the description derived from
+        // it does too.
+        if page.front.description.is_none() {
+            let text = crate::util::html_to_text(
+                model.pages[i]["summary"]
+                    .as_str()
+                    .or(model.pages[i]["content"].as_str())
+                    .unwrap_or_default(),
+            );
+            if !text.is_empty() {
+                model.pages[i]["meta_description"] =
+                    Value::String(crate::util::truncate_words(&text, 160));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Render the body of every section written in Tera.
+fn render_tera_sections(
+    site: &Site,
+    model: &mut Model,
+    engines: &mut BTreeMap<String, Engine>,
+) -> Result<()> {
+    for s in 0..site.sections.len() {
+        let source = site.sections[s].body_source.unwrap_or(s);
+        let Some(file) = &site.sections[source].file else {
+            continue;
+        };
+        if file.body_kind != crate::content::BodyKind::Tera {
+            continue;
+        }
+        let section = &site.sections[s];
+        let lang = &section.lang;
+        let body = &file.body;
+        let what = section.rel().unwrap_or(&file.rel);
+        let mut context = base_context_from(site, model, lang, &section.path);
+        context.insert("section", &model.sections[s]);
+        context.insert("meta_description", &model.sections[s]["meta_description"]);
+        insert_translations(&mut context, &model.sections[s]["translations"], site);
+        let engine = engines.get_mut(lang).expect("engine per language");
+        let html = templates::render_str(engine, body, &context, what).with_context(|| {
+            format!(
+                "producing {}index.html",
+                crate::plan::strip_root(&section.path)
+            )
+        })?;
+        let summary = crate::markdown::summary_of(&html);
+        let words = html.split_whitespace().count();
+        model.sections[s]["content"] = Value::String(html);
+        model.sections[s]["summary"] = match summary {
+            Some(s) => Value::String(s),
+            None => Value::Null,
+        };
+        model.sections[s]["word_count"] = json!(words);
+    }
+    Ok(())
+}
+
 /// Render every output of `plan` into memory.
 fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
     let mut model = Model::new(site, plan.paths());
@@ -203,89 +300,12 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
     if has_tera_page || has_tera_section {
         let mut engines = make_engines(site, &Arc::new(model.clone()))?;
         if has_tera_page {
-            for i in 0..site.pages.len() {
-                let source = site.pages[i].body_source.unwrap_or(i);
-                if site.pages[source].file.body_kind != crate::content::BodyKind::Tera {
-                    continue;
-                }
-                let page = &site.pages[i];
-                let lang = &page.file.lang;
-                let body = &site.pages[source].file.body;
-                let what = &page.file.rel;
-                let mut context = base_context_from(site, &model, lang, &page.path);
-                context.insert("page", &model.pages[i]);
-                context.insert("section", &light(&model.sections[page.section]));
-                context.insert("meta_description", &model.pages[i]["meta_description"]);
-                insert_translations(&mut context, &model.pages[i]["translations"], site);
-                let engine = engines.get_mut(lang).expect("engine per language");
-                let html =
-                    templates::render_str(engine, body, &context, what).with_context(|| {
-                        format!(
-                            "producing {}index.html",
-                            crate::plan::strip_root(&page.path)
-                        )
-                    })?;
-                let summary = crate::markdown::summary_of(&html);
-                let words = html.split_whitespace().count();
-                model.pages[i]["content"] = Value::String(html);
-                model.pages[i]["summary"] = match summary {
-                    Some(s) => Value::String(s),
-                    None => Value::Null,
-                };
-                model.pages[i]["word_count"] = json!(words);
-                model.pages[i]["reading_time"] = json!(words.div_ceil(200).max(1));
-                // The body only exists now, so the description derived from
-                // it does too.
-                if page.front.description.is_none() {
-                    let text = crate::util::html_to_text(
-                        model.pages[i]["summary"]
-                            .as_str()
-                            .or(model.pages[i]["content"].as_str())
-                            .unwrap_or_default(),
-                    );
-                    if !text.is_empty() {
-                        model.pages[i]["meta_description"] =
-                            Value::String(crate::util::truncate_words(&text, 160));
-                    }
-                }
-            }
+            render_tera_pages(site, &mut model, &mut engines)?;
             refresh_listings(site, &mut model);
             engines = make_engines(site, &Arc::new(model.clone()))?;
         }
         if has_tera_section {
-            for s in 0..site.sections.len() {
-                let source = site.sections[s].body_source.unwrap_or(s);
-                let Some(file) = &site.sections[source].file else {
-                    continue;
-                };
-                if file.body_kind != crate::content::BodyKind::Tera {
-                    continue;
-                }
-                let section = &site.sections[s];
-                let lang = &section.lang;
-                let body = &file.body;
-                let what = section.rel().unwrap_or(&file.rel);
-                let mut context = base_context_from(site, &model, lang, &section.path);
-                context.insert("section", &model.sections[s]);
-                context.insert("meta_description", &model.sections[s]["meta_description"]);
-                insert_translations(&mut context, &model.sections[s]["translations"], site);
-                let engine = engines.get_mut(lang).expect("engine per language");
-                let html =
-                    templates::render_str(engine, body, &context, what).with_context(|| {
-                        format!(
-                            "producing {}index.html",
-                            crate::plan::strip_root(&section.path)
-                        )
-                    })?;
-                let summary = crate::markdown::summary_of(&html);
-                let words = html.split_whitespace().count();
-                model.sections[s]["content"] = Value::String(html);
-                model.sections[s]["summary"] = match summary {
-                    Some(s) => Value::String(s),
-                    None => Value::Null,
-                };
-                model.sections[s]["word_count"] = json!(words);
-            }
+            render_tera_sections(site, &mut model, &mut engines)?;
         }
     }
     expand_shortcodes(site, &mut model)?;
@@ -324,7 +344,9 @@ fn render_all(site: &Site, plan: &Plan) -> Result<BTreeMap<String, Vec<u8>>> {
 
 /// An HTML file rssite renders, as opposed to one it publishes as it is.
 fn is_rendered_html(output: &Output) -> bool {
-    output.path.ends_with(".html")
+    std::path::Path::new(&output.path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("html"))
         && !matches!(
             output.kind,
             Kind::Static(_) | Kind::Asset(_) | Kind::Image(_) | Kind::Sass(_)
@@ -602,6 +624,99 @@ impl Renderer<'_> {
         bytes
     }
 
+    fn render_language_feed(&mut self, lang: &str) -> Result<String> {
+        let pages: Vec<usize> = (0..self.site.pages.len())
+            .filter(|&p| self.site.pages[p].file.lang == lang)
+            .collect();
+        let root = self
+            .site
+            .sections
+            .iter()
+            .position(|s| s.lang == lang && s.is_root())
+            .expect("root section");
+        let alternate = self.site.sections[root].permalink.clone();
+        let title = self.site.config.language_title(lang).to_owned();
+        // The language's own feed path, also for the copy at the site
+        // root (feeds.root): the two are the same feed, byte for
+        // byte, and a reader following its self link moves to the
+        // language's URL.
+        let path = format!(
+            "{}{}",
+            crate::plan::strip_root(
+                self.site
+                    .config
+                    .language(lang)
+                    .map_or("/", super::config::Language::prefix)
+            ),
+            self.site.config.feeds.filename
+        );
+        self.render_feed(lang, pages, &path, &alternate, &title, None)
+    }
+
+    fn render_section_feed(&mut self, s: usize, path: &str) -> Result<String> {
+        let section = &self.site.sections[s];
+        let lang = section.lang.clone();
+        let title = format!(
+            "{} - {}",
+            self.site.config.language_title(&lang),
+            section.title()
+        );
+        let alternate = section.permalink.clone();
+        let pages = section.pages.clone();
+        let view = self.model.sections[s].clone();
+        self.render_feed(
+            &lang,
+            pages,
+            path,
+            &alternate,
+            &title,
+            Some(("section", view)),
+        )
+    }
+
+    fn render_term_feed(&mut self, taxonomy: usize, term: usize, path: &str) -> Result<String> {
+        let model = &self.site.taxonomies[taxonomy];
+        let t = &model.terms[term];
+        let lang = model.lang.clone();
+        let title = format!("{} - {}", self.site.config.language_title(&lang), t.name);
+        let alternate = t.permalink.clone();
+        let pages = t.pages.clone();
+        let view = self.model.taxonomies[taxonomy]["terms"][term].clone();
+        self.render_feed(&lang, pages, path, &alternate, &title, Some(("term", view)))
+    }
+
+    fn render_root(&mut self) -> Result<String> {
+        let fallback = self.site.config.fallback().to_owned();
+        if self.site.templates.has("root.html") {
+            let mut context = self.base_context(&fallback, "/");
+            insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
+            templates::render(self.engine(&fallback), "root.html", &context)
+        } else {
+            let prefix = self
+                .site
+                .config
+                .language(&fallback)
+                .map(|l| l.prefix().to_owned())
+                .unwrap_or_default();
+            Ok(crate::builtin::redirect(&format!(
+                "{}{prefix}",
+                self.site.config.base_url
+            )))
+        }
+    }
+
+    fn render_not_found(&mut self, lang: &str) -> Result<String> {
+        let prefix = self
+            .site
+            .config
+            .language(lang)
+            .map(|l| l.prefix().to_owned())
+            .unwrap_or_default();
+        let mut context = self.base_context(lang, &format!("{prefix}404.html"));
+        insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
+        templates::render(self.engine(lang), "404.html", &context)
+    }
+
     fn render_unscoped(&mut self, output: &Output) -> Result<Vec<u8>> {
         Ok(match &output.kind {
             Kind::Page(i) => self.render_page(*i)?.into_bytes(),
@@ -615,117 +730,26 @@ impl Renderer<'_> {
                 term,
                 pager,
             } => self.render_term(*taxonomy, *term, *pager)?.into_bytes(),
-            Kind::LanguageFeed(lang) => {
-                let lang = lang.clone();
-                let pages: Vec<usize> = (0..self.site.pages.len())
-                    .filter(|&p| self.site.pages[p].file.lang == lang)
-                    .collect();
-                let root = self
-                    .site
-                    .sections
-                    .iter()
-                    .position(|s| s.lang == lang && s.is_root())
-                    .expect("root section");
-                let alternate = self.site.sections[root].permalink.clone();
-                let title = self.site.config.language_title(&lang).to_owned();
-                // The language's own feed path, also for the copy at the site
-                // root (feeds.root): the two are the same feed, byte for
-                // byte, and a reader following its self link moves to the
-                // language's URL.
-                let path = format!(
-                    "{}{}",
-                    crate::plan::strip_root(
-                        self.site
-                            .config
-                            .language(&lang)
-                            .map(|l| l.prefix())
-                            .unwrap_or("/")
-                    ),
-                    self.site.config.feeds.filename
-                );
-                self.render_feed(&lang, pages, &path, &alternate, &title, None)?
-                    .into_bytes()
-            }
-            Kind::SectionFeed(s) => {
-                let section = &self.site.sections[*s];
-                let lang = section.lang.clone();
-                let title = format!(
-                    "{} - {}",
-                    self.site.config.language_title(&lang),
-                    section.title()
-                );
-                let alternate = section.permalink.clone();
-                let pages = section.pages.clone();
-                let view = self.model.sections[*s].clone();
-                self.render_feed(
-                    &lang,
-                    pages,
-                    &output.path,
-                    &alternate,
-                    &title,
-                    Some(("section", view)),
-                )?
-                .into_bytes()
-            }
-            Kind::TermFeed { taxonomy, term } => {
-                let model = &self.site.taxonomies[*taxonomy];
-                let t = &model.terms[*term];
-                let lang = model.lang.clone();
-                let title = format!("{} - {}", self.site.config.language_title(&lang), t.name);
-                let alternate = t.permalink.clone();
-                let pages = t.pages.clone();
-                let view = self.model.taxonomies[*taxonomy]["terms"][*term].clone();
-                self.render_feed(
-                    &lang,
-                    pages,
-                    &output.path,
-                    &alternate,
-                    &title,
-                    Some(("term", view)),
-                )?
-                .into_bytes()
-            }
+            Kind::LanguageFeed(lang) => self.render_language_feed(lang)?.into_bytes(),
+            Kind::SectionFeed(s) => self.render_section_feed(*s, &output.path)?.into_bytes(),
+            Kind::TermFeed { taxonomy, term } => self
+                .render_term_feed(*taxonomy, *term, &output.path)?
+                .into_bytes(),
             Kind::Sitemap => self.render_sitemap()?.into_bytes(),
             Kind::SearchIndex(lang) => self.render_search_index(lang)?.into_bytes(),
             Kind::Robots => {
                 let mut robots = "User-agent: *\nAllow: /\n".to_owned();
                 if self.site.config.sitemap.enabled {
-                    robots.push_str(&format!(
+                    let _ = write!(
+                        robots,
                         "\nSitemap: {}/sitemap.xml\n",
                         self.site.config.base_url
-                    ));
+                    );
                 }
                 robots.into_bytes()
             }
-            Kind::Root => {
-                let fallback = self.site.config.fallback().to_owned();
-                if self.site.templates.has("root.html") {
-                    let mut context = self.base_context(&fallback, "/");
-                    insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
-                    templates::render(self.engine(&fallback), "root.html", &context)?.into_bytes()
-                } else {
-                    let prefix = self
-                        .site
-                        .config
-                        .language(&fallback)
-                        .map(|l| l.prefix().to_owned())
-                        .unwrap_or_default();
-                    crate::builtin::redirect(&format!("{}{prefix}", self.site.config.base_url))
-                        .into_bytes()
-                }
-            }
-            Kind::NotFound(lang) => {
-                let lang = lang.clone();
-                let prefix = self
-                    .site
-                    .config
-                    .language(&lang)
-                    .map(|l| l.prefix().to_owned())
-                    .unwrap_or_default();
-                let mut context = self.base_context(&lang, &format!("{prefix}404.html"));
-                insert_translations(&mut context, &Value::Array(Vec::new()), self.site);
-                templates::render(self.engine(&lang), "404.html", &context)?.into_bytes()
-            }
+            Kind::Root => self.render_root()?.into_bytes(),
+            Kind::NotFound(lang) => self.render_not_found(lang)?.into_bytes(),
             Kind::Static(path) | Kind::Asset(path) => {
                 std::fs::read(path).with_context(|| format!("reading {}", path.display()))?
             }
@@ -743,7 +767,7 @@ impl Renderer<'_> {
             Kind::Image(path) => crate::images::encode(&self.site.images[path])?,
             Kind::Alias { target } => crate::builtin::redirect(target).into_bytes(),
             Kind::HighlightCss => {
-                crate::markdown::highlight_css(&self.site.config.markdown.highlight_theme)?
+                crate::markdown::highlight_css(&self.site.config.markdown.highlight.theme)?
                     .into_bytes()
             }
         })
@@ -772,7 +796,7 @@ impl Renderer<'_> {
     fn render_section(&mut self, s: usize, pager: Option<usize>) -> Result<String> {
         let section = &self.site.sections[s];
         let lang = section.lang.clone();
-        let template = self.site.section_template(section);
+        let template = section.section_template();
         let view = &self.model.sections[s];
         let current_path = match pager {
             Some(n) if n > 1 => format!("{}{}/{n}/", section.path, section.front.paginate_path),
@@ -801,7 +825,7 @@ impl Renderer<'_> {
     fn render_year_archive(&mut self, s: usize, year: i32) -> Result<String> {
         let section = &self.site.sections[s];
         let lang = section.lang.clone();
-        let template = self.site.archive_template(section);
+        let template = section.archive_template();
         let view = self.model.sections[s].clone();
         let current_path = format!("{}{year}/", section.path);
         let pages: Vec<Value> = view["pages"]
@@ -921,11 +945,10 @@ impl Renderer<'_> {
                     .or(self.site.pages[p].date.as_ref())
             })
             .max()
-            .map(|d| d.rfc3339())
-            // Atom requires <updated>. A feed without entries has no date
-            // of its own, and the build's would differ from run to run, so
-            // it carries the epoch: "never".
-            .unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_owned());
+            .map_or_else(
+                || "1970-01-01T00:00:00+00:00".to_owned(),
+                super::i18n::DateValue::rfc3339,
+            );
         let feed_url = format!("{}/{output_path}", self.site.config.base_url);
         let mut context = self.base_context(lang, &format!("/{output_path}"));
         context.insert("pages", &entries);
@@ -999,7 +1022,7 @@ impl Renderer<'_> {
                 .updated
                 .as_ref()
                 .or(page.date.as_ref())
-                .map(|d| d.ymd());
+                .map(super::i18n::DateValue::ymd);
             entries.push((
                 page.permalink.clone(),
                 json!({"permalink": page.permalink, "updated": updated, "alternates": alternates}),
@@ -1007,7 +1030,7 @@ impl Renderer<'_> {
         }
         for section in &site.sections {
             let alternates: Vec<Value> = section.translations.iter().map(|&t| json!({"lang": site.sections[t].lang, "permalink": site.sections[t].permalink})).collect();
-            entries.push((section.permalink.clone(), json!({"permalink": section.permalink, "updated": section.updated.as_ref().map(|d| d.ymd()), "alternates": alternates})));
+            entries.push((section.permalink.clone(), json!({"permalink": section.permalink, "updated": section.updated.as_ref().map(super::i18n::DateValue::ymd), "alternates": alternates})));
             if let Some(pagers) = pager_count(section.pages.len(), section.front.paginate_by)
                 .filter(|_| site.config.sitemap.pagers)
             {

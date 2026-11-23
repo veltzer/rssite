@@ -68,7 +68,7 @@ fn a_redirect_to_nothing_is_an_error() {
             append_config(
                 dir,
                 "[[redirects]]\nfrom = \"/x/\"\nto = \"@/blog/nope.md\"\n",
-            )
+            );
         },
         "no content file matches \"@/blog/nope.md\"",
     );
@@ -88,7 +88,7 @@ fn a_redirect_to_nothing_is_an_error() {
             append_config(
                 dir,
                 "[[redirects]]\nfrom = \"/en/blog/first/\"\nto = \"/en/\"\n",
-            )
+            );
         },
         "two outputs would be written to en/blog/first/index.html",
     );
@@ -241,7 +241,7 @@ fn inferred_term_translations_must_line_up() {
                 dir,
                 "translations = \"i18n/tags.toml\"",
                 "translations = \"i18n/tags.toml\"\ninfer_translations = true",
-            )
+            );
         },
         "set translations or infer_translations, not both",
     );
@@ -589,7 +589,7 @@ fn a_bad_image_or_author_id_is_an_error() {
                 dir,
                 "author = \"Example Author\"",
                 "author_id = \"https://example.org/#me\"",
-            )
+            );
         },
         "author_id names the author's @id, so author must be set too",
     );

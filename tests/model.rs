@@ -1333,7 +1333,6 @@ fn a_single_language_site_needs_no_suffixes_and_no_i18n_directory() {
         !dir.join("_site/style.css").exists(),
         "no sass, no stylesheet"
     );
-    assert!(!dir.join("_site/highlight.css").exists() || true);
     let error = {
         write(&dir, "templates/page.html", "page {{ trans(key=\"x\") }}");
         build_err(&dir)

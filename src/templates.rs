@@ -52,7 +52,7 @@ fn light_page(page: &Page) -> Value {
         "permalink": page.permalink,
         "path": page.path,
         "lang": page.file.lang,
-        "date": page.date.as_ref().map(|d| d.ymd()),
+        "date": page.date.as_ref().map(super::i18n::DateValue::ymd),
     })
 }
 
@@ -227,13 +227,13 @@ pub fn page_view(site: &Site, i: usize) -> Value {
     json!({
         "title": page.front.title,
         "description": page.front.description,
-        "date": date.map(|d| d.ymd()),
-        "datetime": date.map(|d| d.rfc3339()),
+        "date": date.map(super::i18n::DateValue::ymd),
+        "datetime": date.map(super::i18n::DateValue::rfc3339),
         "year": date.map(|d| chrono::Datelike::year(&d.datetime)),
         "month": date.map(|d| chrono::Datelike::month(&d.datetime)),
         "day": date.map(|d| chrono::Datelike::day(&d.datetime)),
-        "updated": page.updated.as_ref().map(|d| d.ymd()),
-        "updated_datetime": updated.map(|d| d.rfc3339()),
+        "updated": page.updated.as_ref().map(super::i18n::DateValue::ymd),
+        "updated_datetime": updated.map(super::i18n::DateValue::rfc3339),
         "slug": page.slug,
         "path": page.path,
         "permalink": page.permalink,
@@ -281,7 +281,7 @@ pub fn section_view(site: &Site, i: usize, pages: &[Value]) -> Value {
         "meta_description": section_meta_description(site, section),
         "components": section.components,
         "relative_path": section.rel(),
-        "updated": section.updated.as_ref().map(|d| d.ymd()),
+        "updated": section.updated.as_ref().map(super::i18n::DateValue::ymd),
         "paginate_by": section.front.paginate_by,
         "sort_by": section.front.sort_by,
         "is_root": section.is_root(),
@@ -462,10 +462,7 @@ impl Model {
     /// `@/blog/post.md` (or with an explicit language suffix) to a permalink.
     fn resolve(&self, path: &str, lang: &str) -> Option<(String, &Value)> {
         let file_name = path.rsplit('/').next().unwrap_or(path);
-        let without_ext = file_name
-            .rsplit_once('.')
-            .map(|(s, _)| s)
-            .unwrap_or(file_name);
+        let without_ext = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
         let (lang, key) = match without_ext.rsplit_once('.') {
             Some((_, suffix)) if self.language_codes.iter().any(|c| c == suffix) => {
                 (suffix.to_owned(), crate::site::strip_lang(path, suffix))
@@ -560,43 +557,9 @@ fn lang_arg(
     Ok(lang)
 }
 
-/// Build the engine for `lang`. User templates first, then the built-in
-/// ones for any name the user did not supply.
-pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<Engine> {
-    let mut tera = Tera::default();
-    let mut raw: Vec<(String, String)> = templates
-        .files
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    for (name, text) in [
-        ("atom.xml", crate::builtin::ATOM),
-        ("sitemap.xml", crate::builtin::SITEMAP),
-        ("404.html", crate::builtin::NOT_FOUND),
-    ] {
-        if !templates.has(name) {
-            raw.push((name.to_owned(), text.to_owned()));
-        }
-    }
-    tera.add_raw_templates(raw)
-        .map_err(|e| anyhow::anyhow!("{}", describe(&e)))?;
-    // Tera's default escaper also rewrites `/` as `&#x2F;`, which turns every
-    // permalink into an entity soup. The five characters that matter are
-    // escaped; a slash is not one of them.
-    tera.set_escape_fn(crate::util::escape_html);
-    // Tera's own suffixes, plus the name it gives a `render_str` template:
-    // a `.tera` content body is escaped like the template that wraps it.
-    tera.autoescape_on(vec![".html", ".htm", ".xml", "__tera_one_off"]);
+/// The functions that look something up by name or path.
+fn register_lookups(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
     let lang = lang.to_owned();
-
-    for forbidden in ["now", "get_random", "get_env"] {
-        tera.register_function(forbidden, move |_: &HashMap<String, Value>| -> tera::Result<Value> {
-            Err(err(format!(
-                "{forbidden}() is not available: its result would differ between builds of the same sources"
-            )))
-        });
-    }
-
     {
         let model = Arc::clone(model);
         let lang = lang.clone();
@@ -615,61 +578,6 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
                     .map_err(|e| err(format!("trans: {e}")))
             },
         );
-    }
-    {
-        let model = Arc::clone(model);
-        let lang = lang.clone();
-        tera.register_function("get_url", move |args: &HashMap<String, Value>| -> tera::Result<Value> {
-            let path = require_string(args, "path", "get_url")?;
-            let lang = lang_arg(args, "get_url", &lang, &model)?;
-            let check = arg_bool(args, "check", "get_url", true)?;
-            if let Some(content) = path.strip_prefix("@/") {
-                let (content_path, fragment) = match content.split_once('#') {
-                    Some((p, f)) => (p, Some(f)),
-                    None => (content, None),
-                };
-                return match model.resolve(content_path, &lang) {
-                    Some((permalink, _)) => Ok(Value::String(match fragment {
-                        Some(f) => format!("{permalink}#{f}"),
-                        None => permalink,
-                    })),
-                    None => Err(err(format!("get_url: no content file matches {path:?} in language {lang}"))),
-                };
-            }
-            let relative = path.trim_start_matches('/');
-            let known = model.planned.contains(relative)
-                || model.planned.contains(&format!("{}index.html", if relative.is_empty() || relative.ends_with('/') { relative.to_owned() } else { format!("{relative}/") }));
-            if check && !known {
-                return Err(err(format!(
-                    "get_url: {path:?} is not a file this build produces; pass check=false for a file another tool writes"
-                )));
-            }
-            let url = format!("{}/{relative}", model.base_url);
-            let explicit = args.contains_key("cachebust");
-            if !arg_bool(args, "cachebust", "get_url", model.cachebust)? {
-                return Ok(Value::String(url));
-            }
-            let Some(bustable) = model.bustable.get(relative) else {
-                if explicit {
-                    return Err(err(format!(
-                        "get_url: {path:?} cannot be cache-busted: only a static, published or Sass file has its bytes known before rendering"
-                    )));
-                }
-                return Ok(Value::String(url));
-            };
-            if !model.in_scope(bustable) {
-                if explicit {
-                    return Err(err(format!(
-                        "get_url: {path:?} cannot be cache-busted here: the plan does not list it as a source of this output; write the path as one literal string (a computed path is only known while rendering), and call it from a template rather than a content body or shortcode"
-                    )));
-                }
-                return Ok(Value::String(url));
-            }
-            let hash = model
-                .hash_of(relative, bustable)
-                .map_err(|e| err(format!("get_url: {e:#}")))?;
-            Ok(Value::String(format!("{url}?h={hash}")))
-        });
     }
     {
         let model = Arc::clone(model);
@@ -727,17 +635,81 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
         let lang = lang.clone();
         tera.register_function("get_taxonomy_url", move |args: &HashMap<String, Value>| -> tera::Result<Value> {
             let name = require_string(args, "name", "get_taxonomy_url")?;
-            let term = require_string(args, "term", "get_taxonomy_url")?;
+            let term_name = require_string(args, "term", "get_taxonomy_url")?;
             let lang = lang_arg(args, "get_taxonomy_url", &lang, &model)?;
             if !model.taxonomy_lookup.contains_key(&(lang.clone(), name.clone())) {
                 return Err(err(format!("get_taxonomy_url: {name:?} is not a configured taxonomy")));
             }
-            match model.term_lookup.get(&(lang.clone(), name.clone(), term.clone())) {
+            match model.term_lookup.get(&(lang.clone(), name.clone(), term_name.clone())) {
                 Some(permalink) => Ok(Value::String(permalink.clone())),
-                None => Err(err(format!("get_taxonomy_url: taxonomy {name:?} has no term {term:?} in language {lang}"))),
+                None => Err(err(format!("get_taxonomy_url: taxonomy {name:?} has no term {term_name:?} in language {lang}"))),
             }
         });
     }
+}
+
+/// `get_url`: a permalink, checked against the plan and optionally cache-busted.
+fn register_get_url(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
+    let lang = lang.to_owned();
+    {
+        let model = Arc::clone(model);
+        let lang = lang.clone();
+        tera.register_function("get_url", move |args: &HashMap<String, Value>| -> tera::Result<Value> {
+            let path = require_string(args, "path", "get_url")?;
+            let lang = lang_arg(args, "get_url", &lang, &model)?;
+            let check = arg_bool(args, "check", "get_url", true)?;
+            if let Some(content) = path.strip_prefix("@/") {
+                let (content_path, fragment) = match content.split_once('#') {
+                    Some((p, f)) => (p, Some(f)),
+                    None => (content, None),
+                };
+                return match model.resolve(content_path, &lang) {
+                    Some((permalink, _)) => Ok(Value::String(match fragment {
+                        Some(f) => format!("{permalink}#{f}"),
+                        None => permalink,
+                    })),
+                    None => Err(err(format!("get_url: no content file matches {path:?} in language {lang}"))),
+                };
+            }
+            let relative = path.trim_start_matches('/');
+            let known = model.planned.contains(relative)
+                || model.planned.contains(&format!("{}index.html", if relative.is_empty() || relative.ends_with('/') { relative.to_owned() } else { format!("{relative}/") }));
+            if check && !known {
+                return Err(err(format!(
+                    "get_url: {path:?} is not a file this build produces; pass check=false for a file another tool writes"
+                )));
+            }
+            let url = format!("{}/{relative}", model.base_url);
+            let explicit = args.contains_key("cachebust");
+            if !arg_bool(args, "cachebust", "get_url", model.cachebust)? {
+                return Ok(Value::String(url));
+            }
+            let Some(bustable) = model.bustable.get(relative) else {
+                if explicit {
+                    return Err(err(format!(
+                        "get_url: {path:?} cannot be cache-busted: only a static, published or Sass file has its bytes known before rendering"
+                    )));
+                }
+                return Ok(Value::String(url));
+            };
+            if !model.in_scope(bustable) {
+                if explicit {
+                    return Err(err(format!(
+                        "get_url: {path:?} cannot be cache-busted here: the plan does not list it as a source of this output; write the path as one literal string (a computed path is only known while rendering), and call it from a template rather than a content body or shortcode"
+                    )));
+                }
+                return Ok(Value::String(url));
+            }
+            let hash = model
+                .hash_of(relative, bustable)
+                .map_err(|e| err(format!("get_url: {e:#}")))?;
+            Ok(Value::String(format!("{url}?h={hash}")))
+        });
+    }
+}
+
+/// The functions that read files of the site.
+fn register_data_functions(tera: &mut Tera, model: &Arc<Model>) {
     {
         let model = Arc::clone(model);
         tera.register_function(
@@ -790,6 +762,11 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
             },
         );
     }
+}
+
+/// The filters: `date`, `slugify` and `markdown`.
+fn register_filters(tera: &mut Tera, model: &Arc<Model>, lang: &str) {
+    let lang = lang.to_owned();
     {
         let model = Arc::clone(model);
         let lang = lang.clone();
@@ -802,22 +779,21 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
                     other => other.to_string(),
                 };
                 let lang = lang_arg(args, "date", &lang, &model)?;
-                let long = arg_bool(args, "long", "date", false)?;
-                let format = match arg_string(args, "format", "date")? {
-                    Some(format) => format,
-                    None => {
-                        let language = model
-                            .languages
-                            .iter()
-                            .find(|l| l["code"] == lang.as_str())
-                            .ok_or_else(|| err(format!("no language {lang}")))?;
-                        let key = if long {
-                            "date_format_long"
-                        } else {
-                            "date_format"
-                        };
-                        language[key].as_str().unwrap_or("%Y-%m-%d").to_owned()
-                    }
+                let long_form = arg_bool(args, "long", "date", false)?;
+                let format = if let Some(format) = arg_string(args, "format", "date")? {
+                    format
+                } else {
+                    let language = model
+                        .languages
+                        .iter()
+                        .find(|l| l["code"] == lang.as_str())
+                        .ok_or_else(|| err(format!("no language {lang}")))?;
+                    let key = if long_form {
+                        "date_format_long"
+                    } else {
+                        "date_format"
+                    };
+                    language[key].as_str().unwrap_or("%Y-%m-%d").to_owned()
                 };
                 let names = &model
                     .i18n
@@ -875,6 +851,49 @@ pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<E
             },
         );
     }
+}
+
+/// Build the engine for `lang`. User templates first, then the built-in
+/// ones for any name the user did not supply.
+pub fn engine(model: &Arc<Model>, templates: &Templates, lang: &str) -> Result<Engine> {
+    let mut tera = Tera::default();
+    let mut raw: Vec<(String, String)> = templates
+        .files
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (name, text) in [
+        ("atom.xml", crate::builtin::ATOM),
+        ("sitemap.xml", crate::builtin::SITEMAP),
+        ("404.html", crate::builtin::NOT_FOUND),
+    ] {
+        if !templates.has(name) {
+            raw.push((name.to_owned(), text.to_owned()));
+        }
+    }
+    tera.add_raw_templates(raw)
+        .map_err(|e| anyhow::anyhow!("{}", describe(&e)))?;
+    // Tera's default escaper also rewrites `/` as `&#x2F;`, which turns every
+    // permalink into an entity soup. The five characters that matter are
+    // escaped; a slash is not one of them.
+    tera.set_escape_fn(crate::util::escape_html);
+    // Tera's own suffixes, plus the name it gives a `render_str` template:
+    // a `.tera` content body is escaped like the template that wraps it.
+    tera.autoescape_on(vec![".html", ".htm", ".xml", "__tera_one_off"]);
+    let lang = lang.to_owned();
+
+    for forbidden in ["now", "get_random", "get_env"] {
+        tera.register_function(forbidden, move |_: &HashMap<String, Value>| -> tera::Result<Value> {
+            Err(err(format!(
+                "{forbidden}() is not available: its result would differ between builds of the same sources"
+            )))
+        });
+    }
+
+    register_lookups(&mut tera, model, &lang);
+    register_get_url(&mut tera, model, &lang);
+    register_data_functions(&mut tera, model);
+    register_filters(&mut tera, model, &lang);
     Ok(Engine { tera, lang })
 }
 

@@ -330,7 +330,7 @@ mod tests {
             "`{{ youtube(id=\"a\") }}`\n\n```\n{{ figure(src=\"x\") }}\n```\n\n    {{ note() }}\n";
         let (out, calls) = extract(text, &known, 1).unwrap();
         assert_eq!(out, text);
-        assert!(calls.is_empty());
+        assert_eq!(calls.len(), 0);
     }
 
     #[test]
@@ -339,7 +339,7 @@ mod tests {
             "a {b} {{ page.title }} {% if x %} {{ youtube }} {{ figure(src=\"a\" }} {{ 3() }}\n";
         let (out, calls) = extract(text, &known, 1).unwrap();
         assert_eq!(out, text);
-        assert!(calls.is_empty());
+        assert_eq!(calls.len(), 0);
     }
 
     #[test]
@@ -380,6 +380,6 @@ mod tests {
     fn a_body_without_braces_skips_parsing() {
         let (out, calls) = extract("plain text\n", &|_| false, 1).unwrap();
         assert_eq!(out, "plain text\n");
-        assert!(calls.is_empty());
+        assert_eq!(calls.len(), 0);
     }
 }

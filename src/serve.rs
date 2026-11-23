@@ -39,14 +39,18 @@ impl Served {
     }
 }
 
-pub fn serve(
-    root: &Path,
-    drafts: bool,
-    port: u16,
-    watch: bool,
-    reload: bool,
-    rewrite: bool,
-) -> Result<()> {
+/// Whether the server watches the site, and what it does about a rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Watch {
+    /// Serve what is on disk; never rebuild.
+    Off,
+    /// Rebuild when a source changes.
+    Rebuild,
+    /// Rebuild, and have open pages reload once it succeeds.
+    Reload,
+}
+
+pub fn serve(root: &Path, drafts: bool, port: u16, watch: Watch, rewrite: bool) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("site root {}", root.display()))?;
@@ -62,7 +66,7 @@ pub fn serve(
         "serving {} at http://127.0.0.1:{port}/",
         initial_output_dir.display()
     );
-    if watch {
+    if watch != Watch::Off {
         let root = root.clone();
         let served = Arc::clone(&served);
         let generation = Arc::clone(&generation);
@@ -97,7 +101,7 @@ pub fn serve(
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let served = served.read().expect("served lock").clone();
-        let generation = reload.then(|| generation.load(Ordering::SeqCst));
+        let generation = (watch == Watch::Reload).then(|| generation.load(Ordering::SeqCst));
         std::thread::spawn(move || {
             let base_url = rewrite.then_some(served.base_url.as_str());
             let _ = handle(stream, &served.dir, generation, base_url, port);
@@ -192,9 +196,7 @@ fn rewrite_base_url(body: &[u8], base_url: &str, origin: &str) -> Vec<u8> {
             let after = body.get(i + base.len()).copied();
             let continues = match after {
                 Some(b) if b.is_ascii_alphanumeric() || b == b'.' || b == b'-' => true,
-                Some(b':') => body
-                    .get(i + base.len() + 1)
-                    .is_some_and(|b| b.is_ascii_digit()),
+                Some(b':') => body.get(i + base.len() + 1).is_some_and(u8::is_ascii_digit),
                 _ => false,
             };
             if !continues {
@@ -274,7 +276,7 @@ fn fingerprint(dirs: &[PathBuf], files: &[PathBuf]) -> Vec<(PathBuf, Option<Syst
         entries.push((
             path,
             meta.as_ref().and_then(|m| m.modified().ok()),
-            meta.map(|m| m.len()).unwrap_or(0),
+            meta.map_or(0, |m| m.len()),
         ));
     };
     for file in files {
@@ -320,7 +322,7 @@ fn percent_decode(text: &str) -> String {
         if bytes[i] == b'%'
             && let (Some(high), Some(low)) = (hex(i + 1), hex(i + 2))
         {
-            out.push((high * 16 + low) as u8);
+            out.push(u8::try_from(high * 16 + low).unwrap_or(u8::MAX));
             i += 3;
             continue;
         }
@@ -431,25 +433,22 @@ fn handle(
         );
         return stream.write_all(response.as_bytes());
     }
-    match resolve(dir, request_path) {
-        Some(path) => {
-            let mut body = Vec::new();
-            std::fs::File::open(&path)?.read_to_end(&mut body)?;
-            let kind = content_type(&path);
-            let body = with_reload(kind, body);
-            respond(&mut stream, "200 OK", kind, &body, method == "HEAD")
-        }
-        None => {
-            let not_found = dir.join("404.html");
-            let body = std::fs::read(&not_found).unwrap_or_else(|_| b"404 not found".to_vec());
-            let kind = if not_found.is_file() {
-                "text/html; charset=utf-8"
-            } else {
-                "text/plain; charset=utf-8"
-            };
-            let body = with_reload(kind, body);
-            respond(&mut stream, "404 Not Found", kind, &body, method == "HEAD")
-        }
+    if let Some(path) = resolve(dir, request_path) {
+        let mut body = Vec::new();
+        std::fs::File::open(&path)?.read_to_end(&mut body)?;
+        let kind = content_type(&path);
+        let body = with_reload(kind, body);
+        respond(&mut stream, "200 OK", kind, &body, method == "HEAD")
+    } else {
+        let not_found = dir.join("404.html");
+        let body = std::fs::read(&not_found).unwrap_or_else(|_| b"404 not found".to_vec());
+        let kind = if not_found.is_file() {
+            "text/html; charset=utf-8"
+        } else {
+            "text/plain; charset=utf-8"
+        };
+        let body = with_reload(kind, body);
+        respond(&mut stream, "404 Not Found", kind, &body, method == "HEAD")
     }
 }
 

@@ -238,13 +238,18 @@ pub fn scan(
 }
 
 fn is_temp_file(name: &str) -> bool {
-    name.starts_with('.') || name.starts_with('#') || name.ends_with('~') || name.ends_with(".swp")
+    name.starts_with('.')
+        || name.starts_with('#')
+        || name.ends_with('~')
+        || std::path::Path::new(name)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("swp"))
 }
 
 /// `post.en.md` -> ("post", "en"). With one configured language the suffix
 /// may be omitted; with several it is required.
 fn split_language(name: &str, languages: &[String]) -> Result<(String, String)> {
-    let without_ext = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    let without_ext = name.rsplit_once('.').map_or(name, |(s, _)| s);
     if let Some((stem, suffix)) = without_ext.rsplit_once('.') {
         if languages.iter().any(|l| l == suffix) {
             if stem.is_empty() {
@@ -758,7 +763,7 @@ mod tests {
         let about = &files[0];
         assert_eq!(about.body_kind, BodyKind::Tera);
         assert_eq!(about.kind, FileKind::Page);
-        assert!(about.components.is_empty());
+        assert_eq!(about.components.len(), 0);
         assert_eq!(about.stem, "about");
         assert_eq!(about.lang, "en");
         assert_eq!(about.body, "{{ page.title }}");

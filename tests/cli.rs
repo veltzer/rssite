@@ -83,13 +83,13 @@ fn scaffolded_site_builds_deterministically() {
         .iter()
         .map(|o| o["path"].as_str().unwrap())
         .collect();
-    let built: Vec<String> = files_under(&dir.join("_site"))
+    let site_files: Vec<String> = files_under(&dir.join("_site"))
         .iter()
         .map(|f| format!("_site/{f}"))
         .collect();
     assert_eq!(
         planned,
-        built.iter().map(String::as_str).collect::<Vec<_>>(),
+        site_files.iter().map(String::as_str).collect::<Vec<_>>(),
         "plan and build disagree"
     );
 
@@ -99,15 +99,24 @@ fn scaffolded_site_builds_deterministically() {
 
     let clean = run(&dir, &["clean"]);
     assert!(clean.ok, "{}", clean.stderr);
-    assert!(files_under(&dir.join("_site")).is_empty());
+    assert_eq!(
+        files_under(&dir.join("_site")),
+        [] as [std::string::String; 0]
+    );
+}
+
+/// The fixture, built twice to prove the output deterministic.
+fn bilingual_site(name: &str) -> std::path::PathBuf {
+    let dir = temp_dir(name);
+    copy_dir(&fixture(), &dir);
+    let build = run(&dir, &["build", "--verify-determinism"]);
+    assert!(build.ok, "{}", build.stderr);
+    dir
 }
 
 #[test]
 fn bilingual_fixture_builds() {
-    let dir = temp_dir("bilingual");
-    copy_dir(&fixture(), &dir);
-    let build = run(&dir, &["build", "--verify-determinism"]);
-    assert!(build.ok, "{}", build.stderr);
+    let dir = bilingual_site("bilingual");
 
     let he_first = read(&dir, "_site/he/blog/first/index.html");
     assert!(he_first.contains("<html lang=\"he\" dir=\"rtl\">"));
@@ -147,7 +156,11 @@ fn bilingual_fixture_builds() {
 
     let second = read(&dir, "_site/en/blog/second/index.html");
     assert!(second.contains("id=\"heading-one\"") && second.contains("id=\"heading-one-1\""));
+}
 
+#[test]
+fn bilingual_fixture_archives_and_pagers() {
+    let dir = bilingual_site("bilingual-archives");
     // Year archives: every dated post of a year, in both languages, linked
     // from the section's listing and from each other.
     let archive = read(&dir, "_site/en/blog/2026/index.html");
@@ -187,7 +200,11 @@ fn bilingual_fixture_builds() {
             .is_file()
     );
     assert!(dir.join("_site/en/tags/religion/atom.xml").is_file());
+}
 
+#[test]
+fn bilingual_fixture_aliases_sitemap_and_query() {
+    let dir = bilingual_site("bilingual-query");
     assert!(
         read(&dir, "_site/legacy/third.html").contains("url=https://example.org/en/blog/third/")
     );
@@ -285,7 +302,7 @@ fn unsuffixed_content_file_is_an_error() {
                 dir.join("content/blog/nolang.md"),
                 "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "language suffix",
     );
@@ -300,7 +317,7 @@ fn unknown_language_suffix_is_an_error() {
                 dir.join("content/blog/post.fr.md"),
                 "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "not a configured language",
     );
@@ -315,7 +332,7 @@ fn broken_internal_link_is_an_error() {
                 dir.join("content/blog/broken.en.md"),
                 "+++\ntitle = \"x\"\ndate = 2026-01-01\n+++\n[x](@/blog/missing.md)\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "no content file matches",
     );
@@ -375,7 +392,7 @@ fn undeclared_taxonomy_is_an_error() {
                 dir.join("content/blog/cat.en.md"),
                 "+++\ntitle = \"x\"\ndate = 2026-01-01\n[taxonomies]\ncategories = [\"a\"]\n+++\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "not declared in rssite.toml",
     );
@@ -390,7 +407,7 @@ fn undated_page_in_date_sorted_section_is_an_error() {
                 dir.join("content/blog/undated.en.md"),
                 "+++\ntitle = \"x\"\n+++\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "sorts by date but these pages have none",
     );
@@ -405,7 +422,7 @@ fn colliding_urls_are_an_error() {
                 dir.join("content/blog/other.en.md"),
                 "+++\ntitle = \"x\"\ndate = 2026-01-01\nslug = \"first\"\n+++\n",
             )
-            .unwrap()
+            .unwrap();
         },
         "both render to",
     );
@@ -429,9 +446,9 @@ fn unknown_static_url_is_an_error() {
 
 // ── themes and published directories ──────────────────────────────────────
 
-#[test]
-fn theme_directory_sits_behind_the_site() {
-    let dir = temp_dir("theme");
+/// A site with a `fleet` theme that supplies and layers files.
+fn themed_site(name: &str) -> std::path::PathBuf {
+    let dir = temp_dir(name);
     copy_dir(&fixture(), &dir);
     prepend_config(&dir, "theme = \"fleet\"");
     // The theme supplies what the site lacks: the term template moves there.
@@ -491,7 +508,12 @@ fn theme_directory_sits_behind_the_site() {
             "<p id=\"theme\">{{ trans(key=\"theme_key\") }}</p></body>",
         ),
     );
+    dir
+}
 
+#[test]
+fn theme_directory_sits_behind_the_site() {
+    let dir = themed_site("theme");
     let build = run(&dir, &["build", "--verify-determinism"]);
     assert!(build.ok, "{}", build.stderr);
 
@@ -518,7 +540,11 @@ fn theme_directory_sits_behind_the_site() {
     assert!(read(&dir, "_site/more.css").contains(".more"));
     assert!(read(&dir, "_site/style.css").contains("blue"));
     assert!(dir.join("_site/en/tags/index.html").is_file());
+}
 
+#[test]
+fn theme_files_are_sources_in_the_plan() {
+    let dir = themed_site("theme-plan");
     let plan = run(&dir, &["plan"]);
     assert!(plan.ok, "{}", plan.stderr);
     let manifest: serde_json::Value = serde_json::from_str(&plan.stdout).unwrap();

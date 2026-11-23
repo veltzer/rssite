@@ -71,6 +71,23 @@ pub struct Section {
 }
 
 impl Section {
+    pub fn archive_template(&self) -> String {
+        self.front
+            .archive_template
+            .clone()
+            .unwrap_or_else(|| "archive.html".to_owned())
+    }
+
+    pub fn section_template(&self) -> String {
+        self.front.template.clone().unwrap_or_else(|| {
+            if self.is_root() {
+                "index.html".to_owned()
+            } else {
+                "section.html".to_owned()
+            }
+        })
+    }
+
     pub fn is_root(&self) -> bool {
         self.components.is_empty()
     }
@@ -161,13 +178,15 @@ pub enum BustTarget {
 pub fn sass_output(rel: &str) -> Option<String> {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     let is_partial = rel.split('/').any(|part| part.starts_with('_'));
-    let is_sass = name.ends_with(".scss") || name.ends_with(".sass");
+    let is_sass = std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("scss") || e.eq_ignore_ascii_case("sass"));
     if is_partial || !is_sass {
         return None;
     }
     Some(format!(
         "{}.css",
-        rel.rsplit_once('.').map(|(s, _)| s).unwrap_or(rel)
+        rel.rsplit_once('.').map_or(rel, |(s, _)| s)
     ))
 }
 
@@ -232,7 +251,7 @@ pub fn load_data_paths(text: &str) -> Vec<String> {
 pub fn content_url_paths(text: &str) -> Vec<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r##"get_url\([^)]*\bpath\s*=\s*["'`]@/([^"'`#]+)"##).expect("valid regex")
+        regex::Regex::new(r#"get_url\([^)]*\bpath\s*=\s*["'`]@/([^"'`#]+)"#).expect("valid regex")
     });
     re.captures_iter(text).map(|c| c[1].to_owned()).collect()
 }
@@ -257,10 +276,7 @@ pub fn busted_url_paths(text: &str, default: bool) -> Vec<String> {
     let mut out = Vec::new();
     for c in call.captures_iter(text) {
         let args = c[1].trim();
-        let wanted = flag
-            .captures(args)
-            .map(|f| &f[1] == "true")
-            .unwrap_or(default);
+        let wanted = flag.captures(args).map_or(default, |f| &f[1] == "true");
         if !wanted {
             continue;
         }
@@ -269,8 +285,7 @@ pub fn busted_url_paths(text: &str, default: bool) -> Vec<String> {
                 .get(1)
                 .or(p.get(2))
                 .or(p.get(3))
-                .map(|m| m.as_str())
-                .unwrap_or("");
+                .map_or("", |m| m.as_str());
             if !literal.starts_with("@/") && !literal.is_empty() {
                 out.push(literal.trim_start_matches('/').to_owned());
             }
@@ -387,6 +402,31 @@ pub(crate) fn strip_lang(rel: &str, lang: &str) -> String {
         Some(stem) if !stem.is_empty() && !stem.ends_with('/') => format!("{stem}.{ext}"),
         _ => rel.to_owned(),
     }
+}
+
+/// The error for a page whose directory has no section index in its language.
+fn no_section_message(file: &ContentFile) -> String {
+    let dir = if file.components.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", file.components.join("/"))
+    };
+    format!(
+        "content file {}: its directory has no section index for language {:?}; add {dir}_index.{}.md",
+        file.rel, file.lang, file.lang
+    )
+}
+
+/// Term name -> page indexes, per (language, taxonomy name).
+type CollectedTerms = BTreeMap<(String, String), BTreeMap<String, Vec<usize>>>;
+
+/// Union-find: the root of `x`, flattening the path on the way.
+fn find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
 }
 
 impl Site {
@@ -609,16 +649,89 @@ impl Site {
     fn prefix(&self, lang: &str) -> String {
         self.config
             .language(lang)
-            .map(|l| l.prefix().to_owned())
-            .unwrap_or_else(|| format!("/{lang}/"))
+            .map_or_else(|| format!("/{lang}/"), |l| l.prefix().to_owned())
     }
 
     pub(crate) fn permalink(&self, path: &str) -> String {
         format!("{}{}", self.config.base_url, path)
     }
 
-    fn build_sections(&mut self, files: &[ContentFile]) -> Result<()> {
+    /// A root section for every language that has no `_index` file of its
+    /// own (and whose root is not drafted).
+    fn add_missing_root_sections(
+        &mut self,
+        drafted: &BTreeSet<(Vec<String>, String)>,
+    ) -> Result<()> {
         let codes = self.config.language_codes();
+        for code in &codes {
+            let exists = self.sections.iter().any(|s| s.lang == *code && s.is_root());
+            if exists || drafted.contains(&(Vec::new(), code.clone())) {
+                continue;
+            }
+            let language = self.config.language(code).expect("configured language");
+            let path = self.section_path(code, &[])?;
+            let section = Section {
+                file: None,
+                front: SectionFront {
+                    title: Some(
+                        language
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| self.config.title.clone()),
+                    ),
+                    description: language
+                        .description
+                        .clone()
+                        .or_else(|| Some(self.config.description.clone())),
+                    ..SectionFront::default()
+                },
+                updated: None,
+                lang: code.clone(),
+                components: Vec::new(),
+                key: String::new(),
+                permalink: self.permalink(&path),
+                path,
+                pages: Vec::new(),
+                subsections: Vec::new(),
+                parent: None,
+                translations: Vec::new(),
+                body_source: None,
+                rendered: Rendered::default(),
+                link_sources: Vec::new(),
+                cascade_down: toml::Table::new(),
+                cascade_sources: Vec::new(),
+            };
+            self.section_lookup
+                .insert((code.clone(), "_index.md".to_owned()), self.sections.len());
+            self.sections.push(section);
+        }
+        Ok(())
+    }
+
+    /// Each section's parent is the nearest ancestor directory with a
+    /// section in the same language.
+    fn link_section_parents(&mut self) {
+        let index: BTreeMap<(String, Vec<String>), usize> = self
+            .sections
+            .iter()
+            .enumerate()
+            .map(|(i, s)| ((s.lang.clone(), s.components.clone()), i))
+            .collect();
+        for i in 0..self.sections.len() {
+            let lang = self.sections[i].lang.clone();
+            let mut components = self.sections[i].components.clone();
+            while !components.is_empty() {
+                components.pop();
+                if let Some(&parent) = index.get(&(lang.clone(), components.clone())) {
+                    self.sections[i].parent = Some(parent);
+                    self.sections[parent].subsections.push(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn build_sections(&mut self, files: &[ContentFile]) -> Result<()> {
         // Every (directory, language) that has an index file, plus a root
         // section for every language.
         let mut seen_sections: BTreeMap<(Vec<String>, String), String> = BTreeMap::new();
@@ -690,68 +803,8 @@ impl Site {
             self.section_lookup.insert(lookup_key, self.sections.len());
             self.sections.push(section);
         }
-        for code in &codes {
-            let exists = self.sections.iter().any(|s| s.lang == *code && s.is_root());
-            if exists || drafted.contains(&(Vec::new(), code.clone())) {
-                continue;
-            }
-            let language = self.config.language(code).expect("configured language");
-            let path = self.section_path(code, &[])?;
-            let section = Section {
-                file: None,
-                front: SectionFront {
-                    title: Some(
-                        language
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| self.config.title.clone()),
-                    ),
-                    description: language
-                        .description
-                        .clone()
-                        .or_else(|| Some(self.config.description.clone())),
-                    ..SectionFront::default()
-                },
-                updated: None,
-                lang: code.clone(),
-                components: Vec::new(),
-                key: String::new(),
-                permalink: self.permalink(&path),
-                path,
-                pages: Vec::new(),
-                subsections: Vec::new(),
-                parent: None,
-                translations: Vec::new(),
-                body_source: None,
-                rendered: Rendered::default(),
-                link_sources: Vec::new(),
-                cascade_down: toml::Table::new(),
-                cascade_sources: Vec::new(),
-            };
-            self.section_lookup
-                .insert((code.clone(), "_index.md".to_owned()), self.sections.len());
-            self.sections.push(section);
-        }
-        // Parents: the nearest ancestor directory with a section in the same
-        // language.
-        let index: BTreeMap<(String, Vec<String>), usize> = self
-            .sections
-            .iter()
-            .enumerate()
-            .map(|(i, s)| ((s.lang.clone(), s.components.clone()), i))
-            .collect();
-        for i in 0..self.sections.len() {
-            let lang = self.sections[i].lang.clone();
-            let mut components = self.sections[i].components.clone();
-            while !components.is_empty() {
-                components.pop();
-                if let Some(&parent) = index.get(&(lang.clone(), components.clone())) {
-                    self.sections[i].parent = Some(parent);
-                    self.sections[parent].subsections.push(i);
-                    break;
-                }
-            }
-        }
+        self.add_missing_root_sections(&drafted)?;
+        self.link_section_parents();
         self.drafted_sections = drafted;
         self.cascade_sections();
         Ok(())
@@ -878,17 +931,7 @@ impl Site {
             }
             let Some(&section) = section_index.get(&(file.lang.clone(), file.components.clone()))
             else {
-                let dir = if file.components.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}/", file.components.join("/"))
-                };
-                bail!(
-                    "content file {}: its directory has no section index for language {:?}; add {dir}_index.{}.md",
-                    file.rel,
-                    file.lang,
-                    file.lang
-                );
+                bail!(no_section_message(&file));
             };
             let slug = match &parsed.front.slug {
                 Some(slug) => slugify(slug, self.config.slugify.paths),
@@ -1159,7 +1202,7 @@ impl Site {
                         .then_with(|| self.pages[a].file.rel.cmp(&self.pages[b].file.rel))
                 }),
                 SortBy::None => {
-                    pages.sort_by(|&a, &b| self.pages[a].file.rel.cmp(&self.pages[b].file.rel))
+                    pages.sort_by(|&a, &b| self.pages[a].file.rel.cmp(&self.pages[b].file.rel));
                 }
             }
             for (position, &p) in pages.iter().enumerate() {
@@ -1191,12 +1234,12 @@ impl Site {
         Ok(())
     }
 
-    fn build_taxonomies(&mut self) -> Result<()> {
-        let codes = self.config.language_codes();
+    /// Every page's terms, bucketed by (language, taxonomy) and term name.
+    fn collect_term_pages(&self, codes: &[String]) -> Result<CollectedTerms> {
         // (lang, taxonomy name) -> term name -> page indexes
         let mut collected: BTreeMap<(String, String), BTreeMap<String, Vec<usize>>> =
             BTreeMap::new();
-        for code in &codes {
+        for code in codes {
             for taxonomy in &self.config.taxonomies {
                 collected.insert((code.clone(), taxonomy.name.clone()), BTreeMap::new());
             }
@@ -1221,6 +1264,58 @@ impl Site {
                 }
             }
         }
+        Ok(collected)
+    }
+
+    /// Resolve term translations: every (lang, name) in a row that exists as
+    /// a term is paired with every other existing one in that row.
+    fn link_term_translations(
+        &mut self,
+        translation_tables: BTreeMap<String, Vec<BTreeMap<String, String>>>,
+    ) -> Result<()> {
+        for (name, rows) in translation_tables {
+            for row in rows {
+                let mut present: Vec<(String, usize, usize)> = Vec::new();
+                for (lang, term_name) in &row {
+                    let Some(t) = self
+                        .taxonomies
+                        .iter()
+                        .position(|t| t.name == name && &t.lang == lang)
+                    else {
+                        bail!(
+                            "taxonomy {name} translations: {lang:?} is not a configured language"
+                        );
+                    };
+                    if let Some(term) = self.taxonomies[t]
+                        .terms
+                        .iter()
+                        .position(|term| &term.name == term_name)
+                    {
+                        present.push((lang.clone(), t, term));
+                    }
+                }
+                for (_, t, term) in &present {
+                    let others: Vec<(String, usize)> = present
+                        .iter()
+                        .map(|(lang, _, other_term)| (lang.clone(), *other_term))
+                        .collect();
+                    let slot = &mut self.taxonomies[*t].terms[*term].translations;
+                    if !slot.is_empty() {
+                        bail!(
+                            "taxonomy {name} translations: term {:?} appears in two rows",
+                            self.taxonomies[*t].terms[*term].name
+                        );
+                    }
+                    *slot = others;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn build_taxonomies(&mut self) -> Result<()> {
+        let codes = self.config.language_codes();
+        let mut collected = self.collect_term_pages(&codes)?;
         let mut translation_tables: BTreeMap<String, Vec<BTreeMap<String, String>>> =
             BTreeMap::new();
         for taxonomy in &self.config.taxonomies {
@@ -1293,45 +1388,7 @@ impl Site {
         if let Some(bad) = self.taxonomies.iter().find(|t| t.paginate_by == Some(0)) {
             bail!("taxonomy {}: paginate_by must be at least 1", bad.name);
         }
-        // Resolve term translations: every (lang, name) in a row that exists
-        // as a term is paired with every other existing one in that row.
-        for (name, rows) in translation_tables {
-            for row in rows {
-                let mut present: Vec<(String, usize, usize)> = Vec::new();
-                for (lang, term_name) in &row {
-                    let Some(t) = self
-                        .taxonomies
-                        .iter()
-                        .position(|t| t.name == name && &t.lang == lang)
-                    else {
-                        bail!(
-                            "taxonomy {name} translations: {lang:?} is not a configured language"
-                        );
-                    };
-                    if let Some(term) = self.taxonomies[t]
-                        .terms
-                        .iter()
-                        .position(|term| &term.name == term_name)
-                    {
-                        present.push((lang.clone(), t, term));
-                    }
-                }
-                for (_, t, term) in &present {
-                    let others: Vec<(String, usize)> = present
-                        .iter()
-                        .map(|(lang, _, other_term)| (lang.clone(), *other_term))
-                        .collect();
-                    let slot = &mut self.taxonomies[*t].terms[*term].translations;
-                    if !slot.is_empty() {
-                        bail!(
-                            "taxonomy {name} translations: term {:?} appears in two rows",
-                            self.taxonomies[*t].terms[*term].name
-                        );
-                    }
-                    *slot = others;
-                }
-            }
-        }
+        self.link_term_translations(translation_tables)?;
         Ok(())
     }
 
@@ -1389,13 +1446,6 @@ impl Site {
         // that made it so a conflict can name a file.
         let mut ids: BTreeMap<(String, String), usize> = BTreeMap::new();
         let mut parent: Vec<usize> = Vec::new();
-        fn find(parent: &mut [usize], mut x: usize) -> usize {
-            while parent[x] != x {
-                parent[x] = parent[parent[x]];
-                x = parent[x];
-            }
-            x
-        }
         let mut evidence: BTreeMap<(String, String), String> = BTreeMap::new();
         let empty = Vec::new();
         for (i, page) in self.pages.iter().enumerate() {
@@ -1479,10 +1529,7 @@ impl Site {
         // Explicit language suffix wins; otherwise the current language.
         let codes = self.config.language_codes();
         let file_name = path.rsplit('/').next().unwrap_or(path);
-        let without_ext = file_name
-            .rsplit_once('.')
-            .map(|(s, _)| s)
-            .unwrap_or(file_name);
+        let without_ext = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s);
         let (lang, key) = match without_ext.rsplit_once('.') {
             Some((_, suffix)) if codes.iter().any(|c| c == suffix) => {
                 (suffix.to_owned(), strip_lang(path, suffix))
@@ -1517,8 +1564,11 @@ impl Site {
     fn render_options(&self, overrides: Overrides) -> RenderOptions {
         let site = self.config.render_options();
         RenderOptions {
-            smart_punctuation: overrides.smart.unwrap_or(site.smart_punctuation),
-            math: overrides.math.unwrap_or(site.math),
+            extensions: crate::markdown::Extensions {
+                smart_punctuation: overrides.smart.unwrap_or(site.extensions.smart_punctuation),
+                math: overrides.math.unwrap_or(site.extensions.math),
+                ..site.extensions
+            },
             shortcodes: Some(self.templates.shortcodes()),
             ..site
         }
@@ -1544,7 +1594,14 @@ impl Site {
             };
             let path = self.pages[i].path.clone();
             let body = self
-                .render_body(body_kind, &body, body_line, &lang, &path, overrides, &files)
+                .render_body(
+                    (body_kind, body_line),
+                    &body,
+                    &lang,
+                    &path,
+                    overrides,
+                    &files,
+                )
                 .with_context(|| format!("content file {}", self.pages[i].file.rel))?;
             self.pages[i].rendered = body.rendered;
             self.pages[i].link_sources = body
@@ -1569,9 +1626,8 @@ impl Site {
             let path = self.sections[i].path.clone();
             let body = self
                 .render_body(
-                    file.body_kind,
+                    (file.body_kind, file.body_line),
                     &file.body,
-                    file.body_line,
                     &lang,
                     &path,
                     overrides,
@@ -1609,12 +1665,10 @@ impl Site {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_body(
         &self,
-        kind: BodyKind,
+        (kind, body_line): (BodyKind, usize),
         body: &str,
-        body_line: usize,
         lang: &str,
         path: &str,
         overrides: Overrides,
@@ -1771,24 +1825,6 @@ impl Site {
         }
         years.sort_by_key(|(y, _)| std::cmp::Reverse(*y));
         years
-    }
-
-    pub fn archive_template(&self, section: &Section) -> String {
-        section
-            .front
-            .archive_template
-            .clone()
-            .unwrap_or_else(|| "archive.html".to_owned())
-    }
-
-    pub fn section_template(&self, section: &Section) -> String {
-        section.front.template.clone().unwrap_or_else(|| {
-            if section.is_root() {
-                "index.html".to_owned()
-            } else {
-                "section.html".to_owned()
-            }
-        })
     }
 
     /// Whether a section emits its own feed.
@@ -1984,7 +2020,7 @@ mod tests {
             "{{ load_data(path=\"out/build_info.toml\") }} {% set x = load_data( required=false, path = \"data/a.json\") %} {{ load_data(path=dynamic) }}",
         );
         assert_eq!(found, vec!["out/build_info.toml", "data/a.json"]);
-        assert!(load_data_paths("{{ page.title }}").is_empty());
+        assert_eq!(load_data_paths("{{ page.title }}").len(), 0);
         assert_eq!(
             load_data_paths("{% set m = get_image_metadata(path=\"static/a.png\") %}"),
             vec!["static/a.png"]
@@ -2059,7 +2095,7 @@ mod tests {
         ]);
         let closure = t.closure("page.html");
         let mut names: Vec<&str> = closure.iter().map(String::as_str).collect();
-        names.sort();
+        names.sort_unstable();
         assert_eq!(names, ["_nav.html", "_x.html", "base.html", "page.html"]);
         assert!(
             t.closure("missing.html").is_empty(),
