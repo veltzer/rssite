@@ -308,6 +308,36 @@ fn wrap_lines(lines: &[String], fence: &Fence) -> Result<String> {
     Ok(out)
 }
 
+/// `html` (syntect's output: `<span class="...">`, `</span>` and escaped
+/// text, so every `<` starts one of the two) without the spans that hold
+/// nothing. syntect writes one for a scope that covers no text, the inside
+/// of `''` for instance; it shows nothing and an HTML checker reports it.
+fn drop_empty_spans(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    // where each span still open starts in `out`, and where its tag ends
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    let mut rest = html;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        if let Some(after) = rest.strip_prefix("</span>") {
+            match open.pop() {
+                Some((start, end)) if end == out.len() => out.truncate(start),
+                _ => out.push_str("</span>"),
+            }
+            rest = after;
+        } else {
+            let end = rest.find('>').map_or(rest.len(), |e| e + 1);
+            let start = out.len();
+            out.push_str(&rest[..end]);
+            open.push((start, out.len()));
+            rest = &rest[end..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Highlighted HTML per source line, each line closing the spans it leaves
 /// open and the next reopening them, so every line is well-formed on its own.
 fn highlighted_lines(
@@ -339,7 +369,7 @@ fn highlighted_lines(
             }
         }
         out.push_str(&"</span>".repeat(open.len()));
-        lines.push(out);
+        lines.push(drop_empty_spans(&out));
     }
     Ok(lines)
 }
@@ -369,7 +399,7 @@ fn highlight(code: &str, fence: &Fence) -> Result<String> {
     Ok(format!(
         "<pre class=\"highlight\"><code class=\"language-{}\">{}</code></pre>\n",
         crate::util::escape_html(lang),
-        generator.finalize()
+        drop_empty_spans(&generator.finalize())
     ))
 }
 
@@ -935,6 +965,38 @@ mod tests {
         assert!(out.html.contains("href=\"https://e.org/\""));
         assert_eq!(out.links, vec!["blog/other.md".to_owned()]);
         assert!(render("[a](@/blog/missing.md)", &opts(), &resolve).is_err());
+    }
+
+    #[test]
+    fn empty_spans_are_dropped() {
+        assert_eq!(
+            drop_empty_spans("<span class=\"a\">x<span class=\"b\"></span>y</span>"),
+            "<span class=\"a\">xy</span>"
+        );
+        assert_eq!(
+            drop_empty_spans("a &lt; b<span class=\"a\"><span class=\"b\"></span></span>\n"),
+            "a &lt; b\n"
+        );
+        assert_eq!(
+            drop_empty_spans("<span class=\"a\">\n</span>"),
+            "<span class=\"a\">\n</span>"
+        );
+    }
+
+    #[test]
+    fn highlighted_code_has_no_empty_span() {
+        for fenced in [
+            "```php\n$a = '';\n```\n",
+            "```php {linenos=true}\n$a = '';\n```\n",
+        ] {
+            let highlighted = RenderOptions {
+                highlight: true,
+                ..opts()
+            };
+            let out = render(fenced, &highlighted, &no_links).unwrap();
+            assert!(out.html.contains("<span class=\""), "{}", out.html);
+            assert!(!out.html.contains("\"></span>"), "{}", out.html);
+        }
     }
 
     #[test]
