@@ -1271,7 +1271,7 @@ fn highlighting_can_be_turned_off_and_needs_a_known_theme() {
 
 const SINGLE: &str = "base_url = \"https://one.example\"\ntitle = \"One\"\n[[languages]]\ncode = \"en\"\nname = \"English\"\n";
 
-fn single_language_site(name: &str) -> std::path::PathBuf {
+fn single_language_site(name: &str) -> Scratch {
     let dir = temp_dir(name);
     write(&dir, "rssite.toml", SINGLE);
     write(&dir, "templates/index.html", "root {{ section.title }}");

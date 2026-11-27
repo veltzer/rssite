@@ -104,7 +104,7 @@ fn scaffolded_site_builds_deterministically() {
 }
 
 /// The fixture, built twice to prove the output deterministic.
-fn bilingual_site(name: &str) -> std::path::PathBuf {
+fn bilingual_site(name: &str) -> Scratch {
     let dir = temp_dir(name);
     copy_dir(&fixture(), &dir);
     let build = run(&dir, &["build", "--verify-determinism"]);
@@ -445,7 +445,7 @@ fn unknown_static_url_is_an_error() {
 // ── themes and published directories ──────────────────────────────────────
 
 /// A site with a `fleet` theme that supplies and layers files.
-fn themed_site(name: &str) -> std::path::PathBuf {
+fn themed_site(name: &str) -> Scratch {
     let dir = temp_dir(name);
     copy_dir(&fixture(), &dir);
     prepend_config(&dir, "theme = \"fleet\"");

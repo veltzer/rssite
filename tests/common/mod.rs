@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, PoisonError};
 
 pub fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_rssite"))
@@ -20,11 +21,70 @@ pub fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bilingual")
 }
 
-pub fn temp_dir(name: &str) -> PathBuf {
+/// How many tests of this process are using the cache of the test run.
+static CACHE_USERS: Mutex<usize> = Mutex::new(0);
+
+/// The right to run the binary with [`cache_home`] as its cache. The cache
+/// is removed when the last one alive is dropped. Every [`Scratch`] holds
+/// one; a test that runs the binary outside a scratch directory takes one
+/// for itself.
+pub struct CacheUser;
+
+impl CacheUser {
+    pub fn new() -> Self {
+        *CACHE_USERS.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        Self
+    }
+}
+
+impl Drop for CacheUser {
+    fn drop(&mut self) {
+        let mut users = CACHE_USERS.lock().unwrap_or_else(PoisonError::into_inner);
+        *users -= 1;
+        if *users == 0 {
+            // Under the lock: a test that starts now waits until the cache
+            // is gone, and the binary makes a new one for it. A directory
+            // that will not go is not the test's failure.
+            let _ = std::fs::remove_dir_all(cache_home());
+        }
+    }
+}
+
+/// A directory of a test's own under the system's temp directory. It is
+/// removed when the value is dropped, so a test leaves nothing behind,
+/// whether it passes or panics. Use it as the `&Path` it dereferences to.
+pub struct Scratch {
+    dir: PathBuf,
+    _cache: CacheUser,
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        // A directory that will not go is not the test's failure.
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+pub fn temp_dir(name: &str) -> Scratch {
+    let cache = CacheUser::new();
     let dir = std::env::temp_dir().join(format!("rssite-test-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Scratch { dir, _cache: cache }
 }
 
 pub fn copy_dir(from: &Path, to: &Path) {
@@ -151,7 +211,7 @@ pub fn sources_of(manifest: &serde_json::Value, path: &str) -> Vec<String> {
 }
 
 /// A scratch copy of the bilingual fixture.
-pub fn site(name: &str) -> PathBuf {
+pub fn site(name: &str) -> Scratch {
     let dir = temp_dir(name);
     copy_dir(&fixture(), &dir);
     dir

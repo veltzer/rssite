@@ -873,6 +873,8 @@ fn math_is_a_site_setting_a_page_can_override() {
 #[test]
 fn the_demo_site_checks() {
     let demos = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("demos");
+    // `check` writes nothing into demos/, but it fills the image cache.
+    let _cache = CacheUser::new();
     let check = run(&demos, &["check"]);
     assert!(check.ok, "demos/ no longer builds:\n{}", check.stderr);
 }
@@ -903,7 +905,7 @@ fn code_is_left_to_right_only_in_a_right_to_left_language() {
 
 /// A blog that cascades math and extra, a nested course section that adds
 /// and overrides, and pages that take, override or ignore what comes down.
-fn cascade_site(name: &str) -> std::path::PathBuf {
+fn cascade_site(name: &str) -> Scratch {
     let dir = site(name);
     write(
         &dir,
@@ -1061,7 +1063,7 @@ fn a_cascade_sets_only_what_means_the_same_below() {
 
 // ── shortcodes ───────────────────────────────────────────────────────────
 
-fn shortcode_site(name: &str) -> std::path::PathBuf {
+fn shortcode_site(name: &str) -> Scratch {
     let dir = site(name);
     write(
         &dir,
@@ -1167,7 +1169,7 @@ fn calling_a_shortcode_that_does_not_exist_names_the_file_and_line() {
 
 /// A site whose post shows `static/img/wide.png` (1000 x 500) and
 /// `static/img/small.png` (300 x 200), with `[images]` set by `config`.
-fn image_site(name: &str, config: &str) -> std::path::PathBuf {
+fn image_site(name: &str, config: &str) -> Scratch {
     let dir = site(name);
     std::fs::create_dir_all(dir.join("static/img")).unwrap();
     for (file, w, h) in [("wide.png", 1000, 500), ("small.png", 300, 200)] {
