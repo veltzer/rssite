@@ -5,7 +5,7 @@ Templates are [Tera](https://keats.github.io/tera/docs/) files under `templates/
 ## Which template renders what
 
 | Output | Template |
-|---|---|
+| --- | --- |
 | Root section of a language | `index.html` |
 | Any other section | `section.html`, or the section's `template` |
 | Year archive (`/en/blog/2026/`) | `archive.html`, or the section's `archive_template` |

@@ -36,7 +36,7 @@ _site/                the output
 Running `rssite` with no command prints this list.
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | `plan` | Print the manifest of every file a build would write, with the sources of each |
 | `build` | Build the site, writing only the files whose content changed |
 | `check` | Render every page twice without writing anything: templates, links, translations, determinism |
