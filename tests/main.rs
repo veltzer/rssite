@@ -1,3 +1,6 @@
+// Everything here is test code; clippy.toml lets test code unwrap.
+#![cfg(test)]
+
 //! End-to-end tests: one test binary, so the helpers in `common` are all
 //! used somewhere and the dead-code lint stays honest.
 
