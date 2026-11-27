@@ -604,7 +604,7 @@ impl Planner<'_> {
         }
     }
 
-    /// Image variants: each depends on its image and the [images] settings, nothing else.
+    /// Image variants: each depends on its image and the `[images]` settings, nothing else.
     fn plan_images(&mut self) {
         let site = self.site;
         // settings, nothing else.
